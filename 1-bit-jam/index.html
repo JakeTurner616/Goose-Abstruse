@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GB Jam</title>
+    <style>
+      html, body { height: 100%; margin: 0; background:#0b0f14; }
+      body { display:grid; place-items:center; overflow:hidden; }
+
+      /* The real canvas is scaled by JS (integer scale). */
+      canvas {
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+        background: #0f172a;
+        box-shadow: 0 16px 60px rgba(0,0,0,.55);
+      }
+
+      /* Optional: tiny “frame” vibe */
+      .frame {
+        padding: 14px;
+        border-radius: 18px;
+        background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02));
+        border: 1px solid rgba(255,255,255,.10);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+      <canvas id="game"></canvas>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
