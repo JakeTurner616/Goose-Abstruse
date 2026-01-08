@@ -9,6 +9,7 @@ export type TiledMap = {
   // Convenience handles
   tile: Uint32Array;
   collide: Uint32Array;
+  spawns: Uint32Array;
 };
 
 export type TileMask = {
@@ -143,8 +144,6 @@ function buildTileMasks(
     }
 
     // Decide polarity:
-    // - If the tile’s visible pixels are mostly dark, ground is likely the dark ink => solid = dark.
-    // - If mostly light, ground is likely the light fill => solid = light.
     const avg = cnt ? (sum / cnt) : 0;
     const solidIsDark = avg < 128;
 
@@ -173,7 +172,7 @@ function buildTileMasks(
     }
 
     // Fallback: if thresholding produced nothing but the tile has opaque pixels,
-    // treat opaque as solid (better to collide than to ghost through the map).
+    // treat opaque as solid.
     if (!anyBits && cnt) {
       for (let y = 0; y < th; y++) {
         let bits = 0 >>> 0;
@@ -292,9 +291,10 @@ export async function loadTiled(tmxUrl: string): Promise<TiledWorld> {
 
   const tile = layers["tile"] ?? firstLayer!;
   const collide = layers["collide"] ?? new Uint32Array(w * h);
+  const spawns = layers["spawns"] ?? new Uint32Array(w * h);
 
   return {
-    map: { w, h, tw, th, layers, tile, collide },
+    map: { w, h, tw, th, layers, tile, collide, spawns },
     ts: { firstgid, img, columns, tilecount, tw: tsTw, th: tsTh, masks },
   };
 }
