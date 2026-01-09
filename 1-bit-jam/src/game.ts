@@ -56,7 +56,7 @@ export type Game = {
   draw(offCtx: CanvasRenderingContext2D, vw: number, vh: number): void;
 };
 
-// --- replace separatePair + resolveEntityCollisions with this version
+// --- entity collision (revised weighting + stability)
 
 const COLLIDER_FRAC = 16 / 64;
 const COLLIDER_MIN = 4;
@@ -73,12 +73,30 @@ function entityCollider(p: Player): CAABB {
 
 // small stable hash for pair tie-breaks
 function pairHash(i: number, j: number) {
-  // order-independent
   const a = i < j ? i : j;
   const b = i < j ? j : i;
   let h = (a * 73856093) ^ (b * 19349663);
   h = (h ^ (h >>> 16)) >>> 0;
   return h;
+}
+
+function isControllable(p: Player): boolean {
+  // We already expose _dbg from gooseEntity.ts
+  return !!(p as any)?._dbg?.controllable;
+}
+
+// Bias pushes so the controllable goose is effectively “heavier”.
+// This kills the tiny ping-pong that shows up as baby jitter in crowds / impacts.
+function separationWeights(a: Player, b: Player) {
+  const ca = isControllable(a);
+  const cb = isControllable(b);
+
+  // both same type -> equal split
+  if (ca === cb) return { wa: 0.5, wb: 0.5 };
+
+  // controllable vs baby -> push baby much more
+  if (ca && !cb) return { wa: 0.15, wb: 0.85 };
+  return { wa: 0.85, wb: 0.15 };
 }
 
 function separatePair(
@@ -108,8 +126,6 @@ function separatePair(
   let oxs = ox - SLOP;
   let oys = oy - SLOP;
 
-  // If we're *exactly* overlapping, oxs/oys can be tiny or equal; ensure we push.
-  // (This prevents “stuck together forever” at same spawn.)
   const MIN_PUSH = 0.25;
   if (oxs < MIN_PUSH) oxs = MIN_PUSH;
   if (oys < MIN_PUSH) oys = MIN_PUSH;
@@ -119,11 +135,9 @@ function separatePair(
   const acy = A.y + A.h * 0.5;
   const bcy = B.y + B.h * 0.5;
 
-  // primary separation normal from center delta
   let dx = acx - bcx;
   let dy = acy - bcy;
 
-  // tie-break: if centers coincide (or almost), use deterministic per-pair direction
   const EPS = 1e-6;
   if (Math.abs(dx) < EPS && Math.abs(dy) < EPS) {
     const h = pairHash(i, j);
@@ -131,40 +145,38 @@ function separatePair(
     dy = (h & 2) ? 1 : -1;
   }
 
-  // choose axis:
-  // - prefer smaller penetration
-  // - if close/equal, use which delta component is larger
   const AXIS_EPS = 0.01;
   const chooseX =
     oxs + AXIS_EPS < oys ? true :
     oys + AXIS_EPS < oxs ? false :
-    Math.abs(dx) >= Math.abs(dy); // tie-break when overlaps ~equal
+    Math.abs(dx) >= Math.abs(dy);
+
+  const { wa, wb } = separationWeights(a, b);
 
   if (chooseX) {
     const dir = dx < 0 ? -1 : 1;
-    const push = oxs * 0.5;
+    const push = oxs;
 
-    a.x = clamp(a.x + dir * push, 0, worldW - a.w);
-    b.x = clamp(b.x - dir * push, 0, worldW - b.w);
+    if (wa) a.x = clamp(a.x + dir * push * wa, 0, worldW - a.w);
+    if (wb) b.x = clamp(b.x - dir * push * wb, 0, worldW - b.w);
 
-    a.vx *= 0.6;
-    b.vx *= 0.6;
+    if (wa) a.vx *= 0.6;
+    if (wb) b.vx *= 0.6;
   } else {
     const dir = dy < 0 ? -1 : 1;
-    const push = oys * 0.5;
+    const push = oys;
 
-    a.y = clamp(a.y + dir * push, 0, worldH - a.h);
-    b.y = clamp(b.y - dir * push, 0, worldH - b.h);
+    if (wa) a.y = clamp(a.y + dir * push * wa, 0, worldH - a.h);
+    if (wb) b.y = clamp(b.y - dir * push * wb, 0, worldH - b.h);
 
-    a.vy *= 0.6;
-    b.vy *= 0.6;
+    if (wa) a.vy *= 0.6;
+    if (wb) b.vy *= 0.6;
   }
 
   return true;
 }
 
 function resolveEntityCollisions(entities: Player[], worldW: number, worldH: number) {
-  // Iterating makes stacks converge; critical when many entities overlap.
   const ITERS = 4;
 
   for (let it = 0; it < ITERS; it++) {
@@ -182,6 +194,18 @@ function resolveEntityCollisions(entities: Player[], worldW: number, worldH: num
   }
 }
 
+// Pixel-lock helper for puppets (kills subpixel oscillation -> kills render jitter)
+function snapToPixel(p: Player) {
+  const nx = (p.x + 0.5) | 0;
+  const ny = (p.y + 0.5) | 0;
+
+  // If we corrected position by ~1px, don't keep micro-velocity that causes re-penetration shimmer.
+  if ((nx | 0) !== (p.x | 0)) p.vx *= 0.0;
+  if ((ny | 0) !== (p.y | 0)) p.vy *= 0.0;
+
+  p.x = nx;
+  p.y = ny;
+}
 
 export async function createGame(vw: number, vh: number): Promise<Game> {
   const cam: Cam = { x: 0, y: 0 };
@@ -208,7 +232,6 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     const ww = world ? (world.map.w * world.map.tw) : vw;
     const wh = world ? (world.map.h * world.map.th) : vh;
 
-    // camera integer-locked (stabilizes dither phase)
     cam.x = ((player.x + (player.w >> 1)) - (vw >> 1)) | 0;
     cam.y = ((player.y + (player.h >> 1)) - (vh >> 1)) | 0;
 
@@ -234,6 +257,9 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     );
 
     gooselings.push(...made);
+
+    // start life pixel-locked
+    for (const b of gooselings) snapToPixel(b);
   }
 
   // --- boot
@@ -260,67 +286,65 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
 
   updateCamera();
 
- function update(dt: number, keys: Keys) {
-  if (!player) return;
+  function update(dt: number, keys: Keys) {
+    if (!player) return;
 
-  const allEntities: Player[] = [player, ...gooselings];
+    const allEntities: Player[] = [player, ...gooselings];
 
-  // --- MASTER INTENT (use input, not displacement)
-  const intentX = (keys.left ? -1 : 0) + (keys.right ? 1 : 0);
-  const intentY = (keys.up ? -1 : 0) + (keys.down ? 1 : 0); // currently unused, but kept symmetric
+    // --- MASTER INTENT
+    const intentX = (keys.left ? -1 : 0) + (keys.right ? 1 : 0);
+    const intentY = (keys.up ? -1 : 0) + (keys.down ? 1 : 0);
 
-  if (world) {
-    const ww = world.map.w * world.map.tw;
-    const wh = world.map.h * world.map.th;
+    if (world) {
+      const ww = world.map.w * world.map.tw;
+      const wh = world.map.h * world.map.th;
 
-    const worldInfo = {
-      w: ww,
-      h: wh,
-      tw: world.map.tw,
-      th: world.map.th,
-      tilesW: world.map.w,
-      tilesH: world.map.h,
-    };
+      const worldInfo = {
+        w: ww,
+        h: wh,
+        tw: world.map.tw,
+        th: world.map.th,
+        tilesW: world.map.w,
+        tilesH: world.map.h,
+      };
 
-    // Capture jump event
-    const pvy0 = player.vy;
+      const pvy0 = player.vy;
+      player.update(dt, keys, isSolidTile, worldInfo);
+      const masterJump = (pvy0 >= 0 && player.vy < 0);
 
-    player.update(dt, keys, isSolidTile, worldInfo);
+      for (const b of gooselings) {
+        b.puppetStep(dt, intentX, player.vx, masterJump, isSolidTile, worldInfo);
+      }
 
-    // True jump start this frame: vy flipped to negative
-    const masterJump = (pvy0 >= 0 && player.vy < 0);
+      resolveEntityCollisions(allEntities, ww, wh);
 
-    // IMPORTANT: puppets follow INTENT, not actual dx (dx jitters when pinned / separated)
-    for (const b of gooselings) {
-      b.puppetStep(dt, intentX, intentY, masterJump, isSolidTile, worldInfo);
+      // 🔥 critical: after entity pushes, clamp puppets back to pixel grid
+      for (const b of gooselings) snapToPixel(b);
+    } else {
+      const worldInfo = {
+        w: vw,
+        h: vh,
+        tw: 8,
+        th: 8,
+        tilesW: (vw / 8) | 0,
+        tilesH: (vh / 8) | 0,
+      };
+
+      const pvy0 = player.vy;
+      player.update(dt, keys, () => false, worldInfo);
+      const masterJump = (pvy0 >= 0 && player.vy < 0);
+
+      for (const b of gooselings) {
+        b.puppetStep(dt, intentX, player.vx, masterJump, () => false, worldInfo);
+      }
+
+      resolveEntityCollisions(allEntities, vw, vh);
+
+      for (const b of gooselings) snapToPixel(b);
     }
 
-    resolveEntityCollisions(allEntities, ww, wh);
-  } else {
-    const worldInfo = {
-      w: vw,
-      h: vh,
-      tw: 8,
-      th: 8,
-      tilesW: (vw / 8) | 0,
-      tilesH: (vh / 8) | 0,
-    };
-
-    const pvy0 = player.vy;
-
-    player.update(dt, keys, () => false, worldInfo);
-
-    const masterJump = (pvy0 >= 0 && player.vy < 0);
-
-    for (const b of gooselings) {
-      b.puppetStep(dt, intentX, intentY, masterJump, () => false, worldInfo);
-    }
-
-    resolveEntityCollisions(allEntities, vw, vh);
+    updateCamera();
   }
-
-  updateCamera();
-}
 
   function drawMap(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
     if (!world) return;
@@ -370,7 +394,6 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
 
     drawMap(offCtx, vw, vh);
 
-    // NOTE: gooseEntity.draw already snaps dx/dy with |0 (correct)
     for (const b of gooselings) b.draw(offCtx, cam);
     player.draw(offCtx, cam);
 

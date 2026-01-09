@@ -386,25 +386,27 @@ export async function createGooseEntity(opts?: {
 // -----------------------------------------------------------------------------
  function puppetStep(
   dt: number,
-  masterDx: number,
-  _masterDy: number,
+  masterDx: number,     // intent: -1/0/1
+  masterDy: number,     // reused: player.vx
   masterJump: boolean,
   isSolidTile: SolidTileQuery,
   world: WorldInfo
 ) {
-  // Direction comes ONLY from player intent (sign of masterDx)
   const dir: -1 | 0 | 1 =
     masterDx < 0 ? -1 :
     masterDx > 0 ?  1 : 0;
 
-  // Speed follows intent, but can be smoothed
-  if (dir !== 0) {
-    puppetSpeed = RUN_MAX;
-  } else {
-    puppetSpeed = Math.max(0, puppetSpeed - RUN_DECEL * dt);
-  }
+  // --- target speed = player's actual horizontal speed magnitude (clamped)
+  const pv = Math.abs(masterDy);
+  const target = dir === 0 ? 0 : Math.min(RUN_MAX, pv - 1.8);
 
-  // Apply velocity
+  // --- smooth toward target (no instant RUN_MAX pop)
+  const accel = target > puppetSpeed ? RUN_ACCEL : RUN_DECEL;
+  const dv = accel * dt;
+
+  if (puppetSpeed < target) puppetSpeed = Math.min(target, puppetSpeed + dv);
+  else puppetSpeed = Math.max(target, puppetSpeed - dv);
+
   body.vx = dir * puppetSpeed;
 
   // Jump inherit (unchanged)
@@ -422,7 +424,7 @@ export async function createGooseEntity(opts?: {
   else groundGrace = Math.max(0, groundGrace - dt);
   const groundedStableNow = physState.grounded || groundGrace > 0;
 
-  // Wall stop (does NOT affect direction)
+  // Wall stop
   if (physState.hitLeft || physState.hitRight) {
     body.vx = 0;
   }
@@ -444,35 +446,39 @@ export async function createGooseEntity(opts?: {
   }
 
   tickAnim(dt);
-  void _masterDy;
+
+  // keep the pixel-lock you added
+  body.x = (body.x + 0.5) | 0;
+  body.y = (body.y + 0.5) | 0;
+
   syncDbg();
 }
 
-  function draw(ctx: CanvasRenderingContext2D, cam: { x: number; y: number }) {
-    ctx.imageSmoothingEnabled = false;
+function draw(ctx: CanvasRenderingContext2D, cam: { x: number; y: number }) {
+  ctx.imageSmoothingEnabled = false;
 
-    const frames = anim === "walk" ? walkFrames : anim === "flap" ? flapFrames : idleFrames;
-    const img = frames[frame % frames.length];
+  const frames = anim === "walk" ? walkFrames : anim === "flap" ? flapFrames : idleFrames;
+  const img = frames[frame % frames.length];
 
-    const rx = body.x - cam.x;
-    const ry = body.y - cam.y;
+  const rx = body.x - cam.x;
+  const ry = body.y - cam.y;
 
-    const snapped = controllable ? { x: rx | 0, y: ry | 0 } : sticky.snap(rx, ry);
-    const dx = snapped.x;
-    const dy = snapped.y;
+  // puppets are already pixel-locked; sticky snap can actually cause “hold/flip” jitter
+  const dx = rx | 0;
+  const dy = ry | 0;
 
-    const facing = face.get();
+  const facing = face.get();
 
-    if (facing === 1) {
-      ctx.drawImage(img, dx, dy);
-    } else {
-      ctx.save();
-      ctx.translate(dx + body.w, dy);
-      ctx.scale(-1, 1);
-      ctx.drawImage(img, 0, 0);
-      ctx.restore();
-    }
+  if (facing === 1) {
+    ctx.drawImage(img, dx, dy);
+  } else {
+    ctx.save();
+    ctx.translate(dx + body.w, dy);
+    ctx.scale(-1, 1);
+    ctx.drawImage(img, 0, 0);
+    ctx.restore();
   }
+}
 
   const api: any = {
     get x() {
