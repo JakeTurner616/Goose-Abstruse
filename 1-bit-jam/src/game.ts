@@ -81,20 +81,14 @@ function pairHash(i: number, j: number) {
 }
 
 function isControllable(p: Player): boolean {
-  // We already expose _dbg from gooseEntity.ts
   return !!(p as any)?._dbg?.controllable;
 }
 
-// Bias pushes so the controllable goose is effectively “heavier”.
-// This kills the tiny ping-pong that shows up as baby jitter in crowds / impacts.
 function separationWeights(a: Player, b: Player) {
   const ca = isControllable(a);
   const cb = isControllable(b);
 
-  // both same type -> equal split
   if (ca === cb) return { wa: 0.5, wb: 0.5 };
-
-  // controllable vs baby -> push baby much more
   if (ca && !cb) return { wa: 0.15, wb: 0.85 };
   return { wa: 0.85, wb: 0.15 };
 }
@@ -121,7 +115,6 @@ function separatePair(
   const oy = Math.min(ay2, by2) - Math.max(A.y, B.y);
   if (ox <= 0 || oy <= 0) return false;
 
-  // slop helps reduce shimmer, but we must still resolve perfect overlaps.
   const SLOP = 0.15;
   let oxs = ox - SLOP;
   let oys = oy - SLOP;
@@ -178,10 +171,8 @@ function separatePair(
 
 function resolveEntityCollisions(entities: Player[], worldW: number, worldH: number) {
   const ITERS = 4;
-
   for (let it = 0; it < ITERS; it++) {
     let any = false;
-
     for (let i = 0; i < entities.length; i++) {
       for (let j = i + 1; j < entities.length; j++) {
         if (separatePair(entities[i], entities[j], i, j, worldW, worldH)) {
@@ -189,20 +180,15 @@ function resolveEntityCollisions(entities: Player[], worldW: number, worldH: num
         }
       }
     }
-
     if (!any) break;
   }
 }
 
-// Pixel-lock helper for puppets (kills subpixel oscillation -> kills render jitter)
 function snapToPixel(p: Player) {
   const nx = (p.x + 0.5) | 0;
   const ny = (p.y + 0.5) | 0;
-
-  // If we corrected position by ~1px, don't keep micro-velocity that causes re-penetration shimmer.
   if ((nx | 0) !== (p.x | 0)) p.vx *= 0.0;
   if ((ny | 0) !== (p.y | 0)) p.vy *= 0.0;
-
   p.x = nx;
   p.y = ny;
 }
@@ -220,7 +206,6 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
   function isSolidTile(tx: number, ty: number) {
     if (!world) return false;
     const { map } = world;
-
     if (tx < 0 || ty < 0 || tx >= map.w || ty >= map.h) return true;
     const gidRaw = map.collide[ty * map.w + tx] >>> 0;
     return (gidRaw & GID_MASK) !== 0;
@@ -228,7 +213,6 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
 
   function updateCamera() {
     if (!player) return;
-
     const ww = world ? (world.map.w * world.map.tw) : vw;
     const wh = world ? (world.map.h * world.map.th) : vh;
 
@@ -241,7 +225,6 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
 
   async function spawnGooselings(points: SpawnPoint[]) {
     gooselings.length = 0;
-
     const babies = points.filter(p => p.kind === "gooseling");
     if (!babies.length) return;
 
@@ -257,12 +240,9 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     );
 
     gooselings.push(...made);
-
-    // start life pixel-locked
     for (const b of gooselings) snapToPixel(b);
   }
 
-  // --- boot
   player = await createPlayer({ x: 24, y: 24 });
   world = await loadTiled("/Tiled/sample-map.tmx");
 
@@ -291,57 +271,39 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
 
     const allEntities: Player[] = [player, ...gooselings];
 
-    // --- MASTER INTENT
+    // --- MASTER INTENT (The raw direction input)
     const intentX = (keys.left ? -1 : 0) + (keys.right ? 1 : 0);
-    const intentY = (keys.up ? -1 : 0) + (keys.down ? 1 : 0);
 
-    if (world) {
-      const ww = world.map.w * world.map.tw;
-      const wh = world.map.h * world.map.th;
+    const ww = world ? (world.map.w * world.map.tw) : vw;
+    const wh = world ? (world.map.h * world.map.th) : vh;
+    const tw = world ? world.map.tw : 8;
+    const th = world ? world.map.th : 8;
 
-      const worldInfo = {
-        w: ww,
-        h: wh,
-        tw: world.map.tw,
-        th: world.map.th,
-        tilesW: world.map.w,
-        tilesH: world.map.h,
-      };
+    const worldInfo = {
+      w: ww,
+      h: wh,
+      tw: tw,
+      th: th,
+      tilesW: (ww / tw) | 0,
+      tilesH: (wh / th) | 0,
+    };
 
-      const pvy0 = player.vy;
-      player.update(dt, keys, isSolidTile, worldInfo);
-      const masterJump = (pvy0 >= 0 && player.vy < 0);
+    // Track jump trigger
+    const pvy0 = player.vy;
+    player.update(dt, keys, isSolidTile, worldInfo);
+    const masterJump = (pvy0 >= 0 && player.vy < 0);
 
-      for (const b of gooselings) {
-        b.puppetStep(dt, intentX, player.vx, masterJump, isSolidTile, worldInfo);
-      }
-
-      resolveEntityCollisions(allEntities, ww, wh);
-
-      // 🔥 critical: after entity pushes, clamp puppets back to pixel grid
-      for (const b of gooselings) snapToPixel(b);
-    } else {
-      const worldInfo = {
-        w: vw,
-        h: vh,
-        tw: 8,
-        th: 8,
-        tilesW: (vw / 8) | 0,
-        tilesH: (vh / 8) | 0,
-      };
-
-      const pvy0 = player.vy;
-      player.update(dt, keys, () => false, worldInfo);
-      const masterJump = (pvy0 >= 0 && player.vy < 0);
-
-      for (const b of gooselings) {
-        b.puppetStep(dt, intentX, player.vx, masterJump, () => false, worldInfo);
-      }
-
-      resolveEntityCollisions(allEntities, vw, vh);
-
-      for (const b of gooselings) snapToPixel(b);
+    // --- PUPPET UPDATE
+    for (const b of gooselings) {
+      // We pass intentX so babies know the player is TRYING to move
+      b.puppetStep(dt, intentX, player.vx, masterJump, isSolidTile, worldInfo);
     }
+
+    // --- COLLISION RESOLUTION
+    // This pushes babies away from walls and each other
+    resolveEntityCollisions(allEntities, ww, wh);
+
+    for (const b of gooselings) snapToPixel(b);
 
     updateCamera();
   }
@@ -349,7 +311,6 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
   function drawMap(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
     if (!world) return;
     const { map, ts } = world;
-
     const tw = map.tw, th = map.th;
 
     const x0 = clamp((cam.x / tw) | 0, 0, map.w);
@@ -366,13 +327,10 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     for (let ty = y0; ty < y1; ty++) {
       const row = ty * map.w;
       const dy = ((ty - y0) * th - oy) | 0;
-
       for (let tx = x0; tx < x1; tx++) {
         const dx = ((tx - x0) * tw - ox) | 0;
-
         const gidA = tileLayer[row + tx] >>> 0;
         if ((gidA & GID_MASK) !== 0) drawTile(offCtx, ts, gidA, dx, dy);
-
         const gidB = collideLayer[row + tx] >>> 0;
         if ((gidB & GID_MASK) !== 0) drawTile(offCtx, ts, gidB, dx, dy);
       }
@@ -391,12 +349,9 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
   function draw(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
     offCtx.fillStyle = "#000";
     offCtx.fillRect(0, 0, vw, vh);
-
     drawMap(offCtx, vw, vh);
-
     for (const b of gooselings) b.draw(offCtx, cam);
     player.draw(offCtx, cam);
-
     drawHud(offCtx);
   }
 
@@ -404,9 +359,7 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     cam,
     get invert() { return invert; },
     toggleInvert() { invert = !invert; },
-
     mountainBG,
-
     update,
     draw,
   };

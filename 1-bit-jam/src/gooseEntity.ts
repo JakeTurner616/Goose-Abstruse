@@ -386,8 +386,8 @@ export async function createGooseEntity(opts?: {
 // -----------------------------------------------------------------------------
  function puppetStep(
   dt: number,
-  masterDx: number,     // intent: -1/0/1
-  masterDy: number,     // reused: player.vx
+  masterDx: number,     // Intent: -1 / 0 / 1
+  masterDy: number,     // Player.vx (ignored for speed)
   masterJump: boolean,
   isSolidTile: SolidTileQuery,
   world: WorldInfo
@@ -396,48 +396,55 @@ export async function createGooseEntity(opts?: {
     masterDx < 0 ? -1 :
     masterDx > 0 ?  1 : 0;
 
-  // --- target speed = player's actual horizontal speed magnitude (clamped)
-  const pv = Math.abs(masterDy);
-  const target = dir === 0 ? 0 : Math.min(RUN_MAX, pv - 1.8);
+  // 1. Determine if the baby is currently trying to walk into a wall
+  const pushingWall = dir !== 0 && isPushingWall(body, dir, isSolidTile, world);
 
-  // --- smooth toward target (no instant RUN_MAX pop)
+  // 2. Set target speed. If pushing a wall, target is 0 (Idle).
+  // Added BABY_SPEED_MULT to keep them slightly slower than the player.
+  const BABY_SPEED_MULT = 0.85; 
+  const target = (dir === 0 || pushingWall) ? 0 : (RUN_MAX * BABY_SPEED_MULT);
+
+  // 3. Smooth toward target speed
   const accel = target > puppetSpeed ? RUN_ACCEL : RUN_DECEL;
   const dv = accel * dt;
 
-  if (puppetSpeed < target) puppetSpeed = Math.min(target, puppetSpeed + dv);
-  else puppetSpeed = Math.max(target, puppetSpeed - dv);
+  if (puppetSpeed < target) {
+    puppetSpeed = Math.min(target, puppetSpeed + dv);
+  } else {
+    puppetSpeed = Math.max(target, puppetSpeed - dv);
+  }
 
   body.vx = dir * puppetSpeed;
 
-  // Jump inherit (unchanged)
+  // Jump inherit
   if (masterJump && !puppetJumpLatch) {
     body.vy = Math.min(body.vy, -JUMP_V);
     puppetJumpLatch = true;
   }
   if (!masterJump) puppetJumpLatch = false;
 
-  // Physics
+  // Physics: Standard collision handling
   stepTileAabbPhysics(body, physState, dt, isSolidTile, world, physTune);
 
-  // Ground grace
+  // Ground grace logic
   if (physState.grounded) groundGrace = GROUND_GRACE_T;
   else groundGrace = Math.max(0, groundGrace - dt);
   const groundedStableNow = physState.grounded || groundGrace > 0;
 
-  // Wall stop
+  // Hard stop on internal physics flags
   if (physState.hitLeft || physState.hitRight) {
     body.vx = 0;
   }
 
-  // Facing = intent, never physics
+  // Facing follows intent regardless of movement
   face.tick(dt, body.vx, dir);
 
-  // Animation
+  // 4. Animation logic: Force idle if pushing wall
   if (!groundedStableNow) {
     puppetWalking = false;
-    puppetWalkHold = 0;
     setState("airFlap");
-  } else if (dir === 0) {
+  } else if (dir === 0 || pushingWall) {
+    // This is the clean "unmovable" state you requested
     puppetWalking = false;
     setState("groundIdle");
   } else {
@@ -447,7 +454,7 @@ export async function createGooseEntity(opts?: {
 
   tickAnim(dt);
 
-  // keep the pixel-lock you added
+  // Pixel-lock for rendering stability
   body.x = (body.x + 0.5) | 0;
   body.y = (body.y + 0.5) | 0;
 
