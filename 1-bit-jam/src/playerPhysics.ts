@@ -1,214 +1,139 @@
 // src/playerPhysics.ts
 export type SolidTileQuery = (tx: number, ty: number) => boolean;
 
-export type AABB = {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  vx: number;
-  vy: number;
-};
+export type AABB = { x: number; y: number; w: number; h: number; vx: number; vy: number };
 
 export type PhysicsTuning = {
   grav: number;
   fallMax: number;
-
-  // Mario-ish micro step-up when moving sideways into a 1-3px curb
   stepUp: number;
-
-  // Snap down to keep glued to ground when moving over small height changes
   snapDown: number;
-
-  // Safety cap (prevents “teleporting” through walls at insane speeds)
   maxSubSteps: number;
 };
 
-export type PhysicsState = {
-  grounded: boolean;
-  hitCeil: boolean;
-  hitLeft: boolean;
-  hitRight: boolean;
-};
+export type PhysicsState = { grounded: boolean; hitCeil: boolean; hitLeft: boolean; hitRight: boolean };
 
-export type WorldInfo = {
-  w: number; h: number;       // world size in pixels
-  tw: number; th: number;     // tile size in pixels
-  tilesW: number; tilesH: number;
-};
+export type WorldInfo = { w: number; h: number; tw: number; th: number; tilesW: number; tilesH: number };
 
 export function defaultPhysicsTuning(): PhysicsTuning {
-  return {
-    grav: 780,
-    fallMax: 220,
-    stepUp: 3,
-    snapDown: 4,
-    maxSubSteps: 4,
-  };
+  return { grav: 780, fallMax: 220, stepUp: 3, snapDown: 4, maxSubSteps: 4 };
 }
 
-function clamp(v: number, lo: number, hi: number) {
-  return v < lo ? lo : v > hi ? hi : v;
+const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
+const resetState = (st: PhysicsState) => {
+  st.grounded = st.hitCeil = st.hitLeft = st.hitRight = false;
+};
+
+function hits(x: number, y: number, w: number, h: number, solid: SolidTileQuery, world: WorldInfo) {
+  const tw = world.tw | 0, th = world.th | 0;
+  const x0 = (x / tw) | 0, y0 = (y / th) | 0;
+  const x1 = ((x + w - 1) / tw) | 0, y1 = ((y + h - 1) / th) | 0;
+  for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) if (solid(tx, ty)) return true;
+  return false;
 }
 
-function aabbHitsSolidTiles(
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  isSolid: SolidTileQuery,
-  world: WorldInfo
-) {
-  const tw = world.tw | 0;
+function colSolid(tx: number, y: number, h: number, solid: SolidTileQuery, world: WorldInfo) {
   const th = world.th | 0;
+  const y0 = (y / th) | 0, y1 = ((y + h - 1) / th) | 0;
+  for (let ty = y0; ty <= y1; ty++) if (solid(tx, ty)) return true;
+  return false;
+}
 
-  const x0 = (x / tw) | 0;
-  const y0 = (y / th) | 0;
-  const x1 = ((x + w - 1) / tw) | 0;
-  const y1 = ((y + h - 1) / th) | 0;
+function rowSolid(ty: number, x: number, w: number, solid: SolidTileQuery, world: WorldInfo) {
+  const tw = world.tw | 0;
+  const x0 = (x / tw) | 0, x1 = ((x + w - 1) / tw) | 0;
+  for (let tx = x0; tx <= x1; tx++) if (solid(tx, ty)) return true;
+  return false;
+}
 
-  for (let ty = y0; ty <= y1; ty++) {
-    for (let tx = x0; tx <= x1; tx++) {
-      if (isSolid(tx, ty)) return true;
+function tryStepUp(a: AABB, nx: number, solid: SolidTileQuery, world: WorldInfo, tuning: PhysicsTuning) {
+  const maxUp = tuning.stepUp | 0;
+  if (maxUp <= 0) return false;
+  for (let up = 1; up <= maxUp; up++) {
+    const ny = a.y - up;
+    if (ny < 0) break;
+    if (!hits(nx, ny, a.w, a.h, solid, world)) {
+      a.x = nx;
+      a.y = ny;
+      return true;
     }
   }
   return false;
 }
 
-function columnSolid(
-  tx: number,
-  y: number,
-  h: number,
-  isSolid: SolidTileQuery,
-  world: WorldInfo
-) {
-  const th = world.th | 0;
-  const y0 = (y / th) | 0;
-  const y1 = ((y + h - 1) / th) | 0;
-  for (let ty = y0; ty <= y1; ty++) {
-    if (isSolid(tx, ty)) return true;
-  }
-  return false;
-}
-
-function rowSolid(
-  ty: number,
-  x: number,
-  w: number,
-  isSolid: SolidTileQuery,
-  world: WorldInfo
-) {
-  const tw = world.tw | 0;
-  const x0 = (x / tw) | 0;
-  const x1 = ((x + w - 1) / tw) | 0;
-  for (let tx = x0; tx <= x1; tx++) {
-    if (isSolid(tx, ty)) return true;
-  }
-  return false;
-}
-
-/**
- * Kinematic move (no gravity): attempt to apply (dx,dy) with the same AABB-vs-tiles rules.
- * This is the “puppet” mover for gooselings.
- */
+/** Kinematic move (no gravity): attempt to apply (dx,dy) with the same AABB-vs-tiles rules. */
 export function moveTileAabbKinematic(
   a: AABB,
   st: PhysicsState,
   dx: number,
   dy: number,
-  isSolid: SolidTileQuery,
+  solid: SolidTileQuery,
   world: WorldInfo,
   tuning: PhysicsTuning
 ) {
-  st.grounded = false;
-  st.hitCeil = false;
-  st.hitLeft = false;
-  st.hitRight = false;
+  resetState(st);
 
-  const steps = clamp((Math.max(Math.abs(dx), Math.abs(dy)) / 8) | 0, 1, tuning.maxSubSteps | 0);
-  const sdx = dx / steps;
-  const sdy = dy / steps;
+  const steps = clamp(((Math.max(Math.abs(dx), Math.abs(dy)) / 8) | 0) || 1, 1, tuning.maxSubSteps | 0);
+  const sdx = dx / steps, sdy = dy / steps;
 
   for (let i = 0; i < steps; i++) {
-    // --- X axis (with tiny stepUp)
+    // X
     const nx = a.x + sdx;
-    if (!aabbHitsSolidTiles(nx, a.y, a.w, a.h, isSolid, world)) {
-      a.x = nx;
-    } else {
+    if (!hits(nx, a.y, a.w, a.h, solid, world)) a.x = nx;
+    else {
       const dir = sdx > 0 ? 1 : sdx < 0 ? -1 : 0;
-      let stepped = false;
-
-      if (dir && (tuning.stepUp | 0) > 0) {
-        const maxUp = tuning.stepUp | 0;
-        for (let up = 1; up <= maxUp; up++) {
-          const ny = a.y - up;
-          if (ny < 0) break;
-          if (!aabbHitsSolidTiles(nx, ny, a.w, a.h, isSolid, world)) {
-            a.x = nx;
-            a.y = ny;
-            stepped = true;
-            break;
-          }
-        }
-      }
-
-      if (!stepped) {
+      if (!(dir && tryStepUp(a, nx, solid, world, tuning))) {
         const tw = world.tw | 0;
-        const prevX = a.x;
+        const px = a.x;
 
         if (sdx > 0) {
           const tx = (((nx + a.w - 1) / tw) | 0);
-          if (columnSolid(tx, a.y, a.h, isSolid, world)) {
+          if (colSolid(tx, a.y, a.h, solid, world)) {
             a.x = tx * tw - a.w;
             st.hitRight = true;
           }
         } else if (sdx < 0) {
           const tx = ((nx / tw) | 0);
-          if (columnSolid(tx, a.y, a.h, isSolid, world)) {
+          if (colSolid(tx, a.y, a.h, solid, world)) {
             a.x = (tx + 1) * tw;
             st.hitLeft = true;
           }
         }
 
-        if (aabbHitsSolidTiles(a.x, a.y, a.w, a.h, isSolid, world)) {
-          a.x = prevX;
-        }
+        if (hits(a.x, a.y, a.w, a.h, solid, world)) a.x = px;
       }
     }
 
-    // --- Y axis
+    // Y
     const ny = a.y + sdy;
-    if (!aabbHitsSolidTiles(a.x, ny, a.w, a.h, isSolid, world)) {
-      a.y = ny;
-    } else {
+    if (!hits(a.x, ny, a.w, a.h, solid, world)) a.y = ny;
+    else {
       const th = world.th | 0;
-      const prevY = a.y;
+      const py = a.y;
 
       if (sdy > 0) {
         const ty = (((ny + a.h - 1) / th) | 0);
-        if (rowSolid(ty, a.x, a.w, isSolid, world)) {
+        if (rowSolid(ty, a.x, a.w, solid, world)) {
           a.y = ty * th - a.h;
           st.grounded = true;
         }
       } else if (sdy < 0) {
         const ty = ((ny / th) | 0);
-        if (rowSolid(ty, a.x, a.w, isSolid, world)) {
+        if (rowSolid(ty, a.x, a.w, solid, world)) {
           a.y = (ty + 1) * th;
           st.hitCeil = true;
         }
       }
 
-      if (aabbHitsSolidTiles(a.x, a.y, a.w, a.h, isSolid, world)) {
-        a.y = prevY;
-      }
+      if (hits(a.x, a.y, a.w, a.h, solid, world)) a.y = py;
     }
 
-    // --- snap-down glue
+    // snap-down glue
     if (!st.grounded && sdy >= 0 && (tuning.snapDown | 0) > 0) {
       const maxDown = tuning.snapDown | 0;
       for (let d = 1; d <= maxDown; d++) {
-        if (aabbHitsSolidTiles(a.x, a.y + d, a.w, a.h, isSolid, world)) {
-          a.y = (a.y + d - 1);
+        if (hits(a.x, a.y + d, a.w, a.h, solid, world)) {
+          a.y = a.y + d - 1;
           st.grounded = true;
           break;
         }
@@ -219,73 +144,47 @@ export function moveTileAabbKinematic(
     a.y = clamp(a.y, 0, world.h - a.h);
   }
 
-  if (!st.grounded) {
-    st.grounded = aabbHitsSolidTiles(a.x, a.y + 1, a.w, a.h, isSolid, world);
-  }
+  if (!st.grounded) st.grounded = hits(a.x, a.y + 1, a.w, a.h, solid, world);
 }
 
-/**
- * Platformer physics step.
- */
+/** Platformer physics step. */
 export function stepTileAabbPhysics(
   a: AABB,
   st: PhysicsState,
   dt: number,
-  isSolid: SolidTileQuery,
+  solid: SolidTileQuery,
   world: WorldInfo,
   tuning: PhysicsTuning
 ) {
-  st.grounded = false;
-  st.hitCeil = false;
-  st.hitLeft = false;
-  st.hitRight = false;
+  resetState(st);
 
-  // Gravity + terminal
   a.vy = Math.min(tuning.fallMax, a.vy + tuning.grav * dt);
 
-  // Basic sub-stepping to reduce tunneling
-  const steps = clamp((Math.max(Math.abs(a.vx), Math.abs(a.vy)) * dt / 8) | 0, 1, tuning.maxSubSteps | 0);
+  const steps = clamp((((Math.max(Math.abs(a.vx), Math.abs(a.vy)) * dt) / 8) | 0) || 1, 1, tuning.maxSubSteps | 0);
   const sdt = dt / steps;
 
   for (let i = 0; i < steps; i++) {
-    // --- X axis
-    let nx = a.x + a.vx * sdt;
-    if (!aabbHitsSolidTiles(nx, a.y, a.w, a.h, isSolid, world)) {
-      a.x = nx;
-    } else {
+    // X
+    const nx = a.x + a.vx * sdt;
+    if (!hits(nx, a.y, a.w, a.h, solid, world)) a.x = nx;
+    else {
       const dir = a.vx > 0 ? 1 : a.vx < 0 ? -1 : 0;
-      let stepped = false;
-
-      if (dir && (tuning.stepUp | 0) > 0) {
-        const maxUp = tuning.stepUp | 0;
-        for (let up = 1; up <= maxUp; up++) {
-          const ny = a.y - up;
-          if (ny < 0) break;
-          if (!aabbHitsSolidTiles(nx, ny, a.w, a.h, isSolid, world)) {
-            a.x = nx;
-            a.y = ny;
-            stepped = true;
-            break;
-          }
-        }
-      }
-
-      if (!stepped) {
+      if (!(dir && tryStepUp(a, nx, solid, world, tuning))) {
         const tw = world.tw | 0;
         const left = a.x;
-        const nextLeft = nx;
-        const nextRight = nx + a.w - 1;
+        const nextL = nx;
+        const nextR = nx + a.w - 1;
 
         if (a.vx > 0) {
-          const tx = (nextRight / tw) | 0;
-          if (columnSolid(tx, a.y, a.h, isSolid, world)) {
+          const tx = (nextR / tw) | 0;
+          if (colSolid(tx, a.y, a.h, solid, world)) {
             a.x = tx * tw - a.w;
             a.vx = 0;
             st.hitRight = true;
           }
         } else if (a.vx < 0) {
-          const tx = (nextLeft / tw) | 0;
-          if (columnSolid(tx, a.y, a.h, isSolid, world)) {
+          const tx = (nextL / tw) | 0;
+          if (colSolid(tx, a.y, a.h, solid, world)) {
             a.x = (tx + 1) * tw;
             a.vx = 0;
             st.hitLeft = true;
@@ -294,31 +193,28 @@ export function stepTileAabbPhysics(
           a.vx = 0;
         }
 
-        if (aabbHitsSolidTiles(a.x, a.y, a.w, a.h, isSolid, world)) {
-          a.x = left;
-        }
+        if (hits(a.x, a.y, a.w, a.h, solid, world)) a.x = left;
       }
     }
 
-    // --- Y axis
-    let ny = a.y + a.vy * sdt;
-    if (!aabbHitsSolidTiles(a.x, ny, a.w, a.h, isSolid, world)) {
-      a.y = ny;
-    } else {
+    // Y
+    const ny = a.y + a.vy * sdt;
+    if (!hits(a.x, ny, a.w, a.h, solid, world)) a.y = ny;
+    else {
       const th = world.th | 0;
       const nextTop = ny;
       const nextBot = ny + a.h - 1;
 
       if (a.vy > 0) {
         const ty = (nextBot / th) | 0;
-        if (rowSolid(ty, a.x, a.w, isSolid, world)) {
+        if (rowSolid(ty, a.x, a.w, solid, world)) {
           a.y = ty * th - a.h;
           a.vy = 0;
           st.grounded = true;
         }
       } else if (a.vy < 0) {
         const ty = (nextTop / th) | 0;
-        if (rowSolid(ty, a.x, a.w, isSolid, world)) {
+        if (rowSolid(ty, a.x, a.w, solid, world)) {
           a.y = (ty + 1) * th;
           a.vy = 0;
           st.hitCeil = true;
@@ -328,13 +224,13 @@ export function stepTileAabbPhysics(
       }
     }
 
-    // --- snap-down glue (CRITICAL FIX: if we glue to ground, kill downward velocity)
+    // snap-down glue (keep the “kill vy” fix)
     if (!st.grounded && a.vy >= 0 && (tuning.snapDown | 0) > 0) {
       const maxDown = tuning.snapDown | 0;
       for (let d = 1; d <= maxDown; d++) {
-        if (aabbHitsSolidTiles(a.x, a.y + d, a.w, a.h, isSolid, world)) {
-          a.y = (a.y + d - 1);
-          a.vy = 0;           // <-- fix: don't stay “grounded” with huge +vy
+        if (hits(a.x, a.y + d, a.w, a.h, solid, world)) {
+          a.y = a.y + d - 1;
+          a.vy = 0;
           st.grounded = true;
           break;
         }
@@ -345,7 +241,5 @@ export function stepTileAabbPhysics(
     a.y = clamp(a.y, 0, world.h - a.h);
   }
 
-  if (!st.grounded) {
-    st.grounded = aabbHitsSolidTiles(a.x, a.y + 1, a.w, a.h, isSolid, world);
-  }
+  if (!st.grounded) st.grounded = hits(a.x, a.y + 1, a.w, a.h, solid, world);
 }
