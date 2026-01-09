@@ -5,22 +5,52 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>1 bit</title>
     <style>
-      html, body { height: 100%; margin: 0; background:#0b0f14; }
-      body { display:grid; place-items:center; overflow:hidden; }
-
-      /* The real canvas is scaled by JS (integer scale). */
-      canvas {
-        image-rendering: pixelated;
-        background: #0f172a;
-        box-shadow: 0 16px 60px rgba(0,0,0,.55);
+      :root{
+        --w:#fff;
+        --b:#000;
       }
 
-      /* Optional: tiny “frame” vibe */
-      .frame {
+      html, body { height: 100%; margin: 0; }
+      body{
+        display:grid;
+        place-items:center;
+        overflow:hidden;
+
+        /* 1-bit background only */
+        background: var(--b);
+        color: var(--w);
+
+        /* optional: subtle 1-bit texture (still only black/white) */
+        background-image:
+          radial-gradient(circle at 1px 1px, var(--w) 1px, transparent 1.1px);
+        background-size: 24px 24px;
+        background-color: var(--b);
+      }
+
+      /* The real canvas is scaled by JS (integer scale). */
+      canvas{
+        image-rendering: pixelated;
+
+        /* 1-bit canvas backing (in case you ever see clears) */
+        background: var(--b);
+
+        /* hard, 1-bit border instead of soft shadow */
+        border: 2px solid var(--w);
+        box-shadow: none;
+      }
+
+      /* 1-bit “frame” (no gradients, no alpha shading) */
+      .frame{
         padding: 14px;
+        border: 2px solid var(--w);
+        background: var(--b);
         border-radius: 18px;
-        background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02));
-        border: 1px solid rgba(255,255,255,.10);
+      }
+
+      /* optional: tighter look on small screens */
+      @media (max-width: 520px){
+        .frame{ padding: 10px; border-radius: 14px; }
+        canvas{ border-width: 2px; }
       }
     </style>
   </head>
