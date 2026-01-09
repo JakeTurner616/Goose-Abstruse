@@ -40,7 +40,10 @@ const keys = createKeys();
     h: VIRTUAL_H,
     ctx,
     offCtx,
-    mountainBG: game.mountainBG,
+    mountainBG: {
+      ...game.mountainBG,
+      sampleScreen: (x: number, y: number) => !!game.mountainBG.sampleScreen(x, y),
+    },
     getCam: () => game.cam,
     getInvert: () => game.invert,
   });

@@ -156,7 +156,7 @@ export async function createGooseEntity(opts?: {
   const RUN_DECEL = 1300;
 
   const JUMP_V = 260;
-  const COYOTE_T = 0.08;
+
   const JUMP_BUF_T = 0.1;
 
   const GROUND_GRACE_T = 0.05;
@@ -178,29 +178,18 @@ export async function createGooseEntity(opts?: {
   const animLen: Record<AnimName, number> = { idle: 2, walk: 4, flap: 2 };
   const animRate: Record<AnimName, number> = { idle: 3.5, walk: 10.0, flap: 9.0 };
 
-  let coyote = 0;
+
   let jumpBuf = 0;
   let jumpLatch = false;
 
   let puppetJumpLatch = true;
   let groundGrace = 0;
 
-  // --- PUPPET DIR LATCH (prevents wild flipping when master is pinned)
-  let puppetDir: -1 | 0 | 1 = 1;
-  let puppetDirHold = 0;
+
 
   // latch last meaningful speed too (so we can keep moving when masterDx becomes 0)
   let puppetSpeed = 0;       // px/s (positive magnitude)
-  let puppetSpeedHold = 0;
 
-  // hysteresis thresholds in px/s
-  const DIR_ON = 10;        // must exceed this to set a new dir
-  const DIR_OFF = 4;        // below this we *may* clear dir (if not held)
-  const DIR_HOLD_T = 0.25;  // keep last dir for this long after a strong signal
-
-  // speed latch
-  const SPEED_MIN = 18;       // minimum “keep walking” speed once latched
-  const SPEED_HOLD_T = 0.25;  // seconds to keep latched speed after signal drops
 
 
   const body: AABB = {
@@ -324,8 +313,7 @@ export async function createGooseEntity(opts?: {
     if (!jumpPressed) jumpLatch = false;
     if (jumpBuf > 0) jumpBuf = Math.max(0, jumpBuf - dt);
 
-    if (physState.grounded) coyote = COYOTE_T;
-    else coyote = Math.max(0, coyote - dt);
+
 
     const ax = (k.left ? -1 : 0) + (k.right ? 1 : 0);
 
@@ -339,9 +327,9 @@ export async function createGooseEntity(opts?: {
       body.vx = nv * s;
     }
 
-    if (jumpBuf > 0 && coyote > 0) {
+    if (jumpBuf > 0) {
       jumpBuf = 0;
-      coyote = 0;
+
       body.vy = -JUMP_V;
       logTransition("JUMP!");
     }
@@ -372,13 +360,7 @@ export async function createGooseEntity(opts?: {
     sticky.reset();
     syncDbg();
   }
-  let puppetWalking = false;
-  let puppetWalkHold = 0;
 
-  // start/stop thresholds (px/s) for Game Boy-stable animation
-  const PUPPET_WALK_ENTER = 10;   // start walking above this
-  const PUPPET_WALK_EXIT  = 6;    // stop walking below this
-  const PUPPET_WALK_MIN_T = 0.12; // once walking, keep for at least this long
 
 
 // -----------------------------------------------------------------------------
@@ -387,7 +369,7 @@ export async function createGooseEntity(opts?: {
  function puppetStep(
   dt: number,
   masterDx: number,     // Intent: -1 / 0 / 1
-  masterDy: number,     // Player.vx (ignored for speed)
+  _masterDy: number,     // Player.vx (ignored for speed)
   masterJump: boolean,
   isSolidTile: SolidTileQuery,
   world: WorldInfo
@@ -441,14 +423,14 @@ export async function createGooseEntity(opts?: {
 
   // 4. Animation logic: Force idle if pushing wall
   if (!groundedStableNow) {
-    puppetWalking = false;
+
     setState("airFlap");
   } else if (dir === 0 || pushingWall) {
     // This is the clean "unmovable" state you requested
-    puppetWalking = false;
+
     setState("groundIdle");
   } else {
-    puppetWalking = true;
+
     setState("groundWalk");
   }
 
