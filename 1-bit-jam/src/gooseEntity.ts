@@ -16,7 +16,6 @@ function clamp(v: number, lo: number, hi: number) {
 
 type MoveState = "groundIdle" | "groundWalk" | "airFlap";
 
-// Snap baked sprite sizes to “clean” pixel-art sizes.
 function snapBakeSize(px: number) {
   if (px >= 30) return 32;
   if (px >= 22) return 24;
@@ -24,21 +23,14 @@ function snapBakeSize(px: number) {
   return 12;
 }
 
-// “Sticky” integer snapper: prevents 0.49↔0.51 boundary flips from jitter pushes.
 function makeStickySnap(deadband = 0.20) {
   let init = false;
   let ix = 0;
   let iy = 0;
 
   function snap1(v: number, last: number) {
-    // prefer floor (so it matches your current pipeline)
     const f = v | 0;
-
     if (!init) return f;
-
-    // keep last unless we clearly moved far enough past the boundary
-    // - if we're within [last - deadband, last + 1 + deadband], stick to last
-    // - otherwise update to the new floor
     if (v >= last - deadband && v <= last + 1 + deadband) return last;
     return f;
   }
@@ -51,7 +43,6 @@ function makeStickySnap(deadband = 0.20) {
         init = true;
         return { x: ix, y: iy };
       }
-
       const nx = snap1(x, ix);
       const ny = snap1(y, iy);
       ix = nx;
@@ -64,11 +55,90 @@ function makeStickySnap(deadband = 0.20) {
   };
 }
 
+// facing with hysteresis + cooldown (prevents rapid flip noise)
+function makeFacingController(initial = 1) {
+  let facing = initial as 1 | -1;
+  let hold = 0;
+
+  const FLIP_V = 6;     // px/s threshold to auto-flip from velocity
+  const HOLD_T = 0.10;  // seconds after a flip before allowing another
+
+  return {
+    get() {
+      return facing;
+    },
+    tick(dt: number, vx: number, preferDir: number | 0) {
+      hold = Math.max(0, hold - dt);
+
+      // preferDir wins immediately (player input / puppet intent)
+      if (preferDir !== 0) {
+        facing = preferDir < 0 ? -1 : 1;
+        hold = HOLD_T;
+        return facing;
+      }
+
+      // otherwise only flip from velocity when not in hold window
+      if (hold > 0) return facing;
+
+      if (vx <= -FLIP_V) {
+        if (facing !== -1) hold = HOLD_T;
+        facing = -1;
+      } else if (vx >= FLIP_V) {
+        if (facing !== 1) hold = HOLD_T;
+        facing = 1;
+      }
+
+      return facing;
+    },
+  };
+}
+
+function isPushingWall(
+  a: AABB,
+  dir: -1 | 1,
+  isSolidTile: SolidTileQuery,
+  world: WorldInfo
+) {
+  // Treat WORLD/CANVAS edges as solid walls
+  const EPS = 0.001;
+
+  if (dir < 0) {
+    if (a.x <= 0 + EPS) return true;
+  } else {
+    if (a.x + a.w >= world.w - EPS) return true;
+  }
+
+  // Tile probe just outside the side
+  const tw = world.tw | 0;
+  const th = world.th | 0;
+
+  const px = dir > 0 ? (a.x + a.w) : (a.x - 1);
+
+  if (px < 0 || px >= world.w) return true;
+
+  const y0 = (a.y + 2) | 0;
+  const y1 = (a.y + (a.h >> 1)) | 0;
+  const y2 = (a.y + a.h - 3) | 0;
+
+  const tx = (px / tw) | 0;
+  if (tx < 0 || tx >= world.tilesW) return true;
+
+  const ty0 = (y0 / th) | 0;
+  const ty1 = (y1 / th) | 0;
+  const ty2 = (y2 / th) | 0;
+
+  if (ty0 < 0 || ty0 >= world.tilesH) return true;
+  if (ty1 < 0 || ty1 >= world.tilesH) return true;
+  if (ty2 < 0 || ty2 >= world.tilesH) return true;
+
+  return isSolidTile(tx, ty0) || isSolidTile(tx, ty1) || isSolidTile(tx, ty2);
+}
+
 export async function createGooseEntity(opts?: {
   x?: number;
   y?: number;
-  scale?: number;          // 1 = goose, <1 = gooseling
-  controllable?: boolean;  // false = ignores input (but still simulates)
+  scale?: number;
+  controllable?: boolean;
 }): Promise<Player> {
   const scale = opts?.scale ?? 1;
 
@@ -81,23 +151,16 @@ export async function createGooseEntity(opts?: {
   const walkFrames = baked.walk;
   const flapFrames = baked.flap;
 
-  // Movement tuning (goose/controller only)
   const RUN_MAX = 90;
   const RUN_ACCEL = 900;
   const RUN_DECEL = 1300;
 
   const JUMP_V = 260;
   const COYOTE_T = 0.08;
-  const JUMP_BUF_T = 0.10;
+  const JUMP_BUF_T = 0.1;
 
-  // --- State smoothing
   const GROUND_GRACE_T = 0.05;
 
-  // Hysteresis so walk/idle doesn’t thrash near the threshold.
-  const WALK_ENTER = 8; // px/s
-  const WALK_EXIT = 4;  // px/s
-
-  // Physics
   const physTune = defaultPhysicsTuning();
   const physState: PhysicsState = {
     grounded: false,
@@ -106,9 +169,7 @@ export async function createGooseEntity(opts?: {
     hitRight: false,
   };
 
-  // State
   let state: MoveState = "groundIdle";
-  let facing = 1;
 
   let anim: AnimName = "idle";
   let frame = 0;
@@ -117,16 +178,30 @@ export async function createGooseEntity(opts?: {
   const animLen: Record<AnimName, number> = { idle: 2, walk: 4, flap: 2 };
   const animRate: Record<AnimName, number> = { idle: 3.5, walk: 10.0, flap: 9.0 };
 
-  // goose-only jump state
   let coyote = 0;
   let jumpBuf = 0;
   let jumpLatch = false;
 
-  // puppet jump latch:
   let puppetJumpLatch = true;
-
-  // grounded smoothing
   let groundGrace = 0;
+
+  // --- PUPPET DIR LATCH (prevents wild flipping when master is pinned)
+  let puppetDir: -1 | 0 | 1 = 1;
+  let puppetDirHold = 0;
+
+  // latch last meaningful speed too (so we can keep moving when masterDx becomes 0)
+  let puppetSpeed = 0;       // px/s (positive magnitude)
+  let puppetSpeedHold = 0;
+
+  // hysteresis thresholds in px/s
+  const DIR_ON = 10;        // must exceed this to set a new dir
+  const DIR_OFF = 4;        // below this we *may* clear dir (if not held)
+  const DIR_HOLD_T = 0.25;  // keep last dir for this long after a strong signal
+
+  // speed latch
+  const SPEED_MIN = 18;       // minimum “keep walking” speed once latched
+  const SPEED_HOLD_T = 0.25;  // seconds to keep latched speed after signal drops
+
 
   const body: AABB = {
     x: opts?.x ?? 24,
@@ -138,16 +213,78 @@ export async function createGooseEntity(opts?: {
   };
 
   const controllable = opts?.controllable ?? true;
-
-  // Only puppets get sticky pixel snap (this is the targeted fix).
-  // Deadband tuned small to remove shimmer without making motion feel “laggy”.
   const sticky = makeStickySnap(0.22);
+  const face = makeFacingController(1);
+
+  type DebugState = {
+    id: string;
+    controllable: boolean;
+
+    state: MoveState;
+    anim: AnimName;
+    frame: number;
+
+    grounded: boolean;
+    grace: number;
+
+    hitL: boolean;
+    hitR: boolean;
+    hitC: boolean;
+
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+  };
+
+  const dbg: DebugState = {
+    id: ((Math.random() * 1e9) | 0).toString(36),
+    controllable,
+    state,
+    anim,
+    frame,
+    grounded: false,
+    grace: 0,
+    hitL: false,
+    hitR: false,
+    hitC: false,
+    x: body.x,
+    y: body.y,
+    vx: body.vx,
+    vy: body.vy,
+  };
+
+  function syncDbg() {
+    dbg.state = state;
+    dbg.anim = anim;
+    dbg.frame = frame;
+    dbg.grounded = !!physState.grounded;
+    dbg.grace = groundGrace;
+    dbg.hitL = !!physState.hitLeft;
+    dbg.hitR = !!physState.hitRight;
+    dbg.hitC = !!physState.hitCeil;
+    dbg.x = body.x;
+    dbg.y = body.y;
+    dbg.vx = body.vx;
+    dbg.vy = body.vy;
+  }
+
+  function logTransition(kind: string, extra?: string) {
+    console.log(
+      `[${dbg.id}${controllable ? ":P" : ":B"}] ${kind} ` +
+        `st=${state} an=${anim}:${frame} g=${physState.grounded ? 1 : 0}(gr=${groundGrace.toFixed(2)}) ` +
+        `hit(LR C)=(${physState.hitLeft ? 1 : 0}${physState.hitRight ? 1 : 0} ${physState.hitCeil ? 1 : 0}) ` +
+        `v=(${body.vx.toFixed(1)},${body.vy.toFixed(1)}) ` +
+        (extra ?? "")
+    );
+  }
 
   function setAnim(next: AnimName) {
     if (anim === next) return;
     anim = next;
     frame = 0;
     at = 0;
+    logTransition("ANIM->", next);
   }
 
   function tickAnim(dt: number) {
@@ -166,31 +303,16 @@ export async function createGooseEntity(opts?: {
     if (state === "airFlap") setAnim("flap");
     else if (state === "groundWalk") setAnim("walk");
     else setAnim("idle");
+
+    logTransition("STATE->", next);
   }
 
-  function postPhysicsStateUpdate(dt: number, vxForState: number) {
+  function groundedStable(dt: number) {
     if (physState.grounded) groundGrace = GROUND_GRACE_T;
     else groundGrace = Math.max(0, groundGrace - dt);
-
-    const groundedStable = physState.grounded || groundGrace > 0;
-
-    if (!groundedStable) {
-      setState("airFlap");
-      return;
-    }
-
-    const av = Math.abs(vxForState);
-
-    if (state === "groundWalk") {
-      if (av <= WALK_EXIT) setState("groundIdle");
-      else setState("groundWalk");
-    } else {
-      if (av >= WALK_ENTER) setState("groundWalk");
-      else setState("groundIdle");
-    }
+    return physState.grounded || groundGrace > 0;
   }
 
-  // Normal controller (goose)
   function update(dt: number, keys: Keys, isSolidTile: SolidTileQuery, world: WorldInfo) {
     const k = controllable ? keys : (NO_KEYS as Keys);
 
@@ -206,10 +328,10 @@ export async function createGooseEntity(opts?: {
     else coyote = Math.max(0, coyote - dt);
 
     const ax = (k.left ? -1 : 0) + (k.right ? 1 : 0);
+
     if (ax) {
       body.vx += ax * RUN_ACCEL * dt;
       body.vx = clamp(body.vx, -RUN_MAX, RUN_MAX);
-      facing = ax < 0 ? -1 : 1;
     } else {
       const s = Math.sign(body.vx);
       const v = Math.abs(body.vx);
@@ -221,61 +343,110 @@ export async function createGooseEntity(opts?: {
       jumpBuf = 0;
       coyote = 0;
       body.vy = -JUMP_V;
+      logTransition("JUMP!");
     }
 
     stepTileAabbPhysics(body, physState, dt, isSolidTile, world, physTune);
 
-    if (body.vx < -1) facing = -1;
-    else if (body.vx > 1) facing = 1;
+    const onGround = groundedStable(dt);
 
-    postPhysicsStateUpdate(dt, body.vx);
+    if (!onGround) {
+      setState("airFlap");
+    } else if (ax === 0) {
+      setState("groundIdle");
+    } else {
+      const dir = (ax < 0 ? -1 : 1) as -1 | 1;
+      const pushingWall = isPushingWall(body, dir, isSolidTile, world);
+      if (pushingWall) {
+        body.vx = 0;
+        setState("groundIdle");
+      } else {
+        setState("groundWalk");
+      }
+    }
+
+    face.tick(dt, body.vx, ax as -1 | 0 | 1);
+
     tickAnim(dt);
 
-    // goose: no sticky snap needed; but if you ever toggle controllable at runtime,
-    // keep snapper coherent.
     sticky.reset();
+    syncDbg();
+  }
+  let puppetWalking = false;
+  let puppetWalkHold = 0;
+
+  // start/stop thresholds (px/s) for Game Boy-stable animation
+  const PUPPET_WALK_ENTER = 10;   // start walking above this
+  const PUPPET_WALK_EXIT  = 6;    // stop walking below this
+  const PUPPET_WALK_MIN_T = 0.12; // once walking, keep for at least this long
+
+
+// -----------------------------------------------------------------------------
+// gooseEntity.ts (inside puppetStep) — ENTIRE FIXED SECTION
+// -----------------------------------------------------------------------------
+ function puppetStep(
+  dt: number,
+  masterDx: number,
+  _masterDy: number,
+  masterJump: boolean,
+  isSolidTile: SolidTileQuery,
+  world: WorldInfo
+) {
+  // Direction comes ONLY from player intent (sign of masterDx)
+  const dir: -1 | 0 | 1 =
+    masterDx < 0 ? -1 :
+    masterDx > 0 ?  1 : 0;
+
+  // Speed follows intent, but can be smoothed
+  if (dir !== 0) {
+    puppetSpeed = RUN_MAX;
+  } else {
+    puppetSpeed = Math.max(0, puppetSpeed - RUN_DECEL * dt);
   }
 
-  function puppetStep(
-    dt: number,
-    masterDx: number,
-    _masterDy: number,
-    masterJump: boolean,
-    isSolidTile: SolidTileQuery,
-    world: WorldInfo
-  ) {
-    const x0 = body.x;
-    const y0 = body.y;
+  // Apply velocity
+  body.vx = dir * puppetSpeed;
 
-    const targetVx = dt > 0 ? (masterDx / dt) : 0;
-
-    const FOLLOW_RATE = 18;
-    const t = Math.min(1, dt * FOLLOW_RATE);
-    body.vx = body.vx + (targetVx - body.vx) * t;
-
-    if (masterJump && !puppetJumpLatch) {
-      body.vy = Math.min(body.vy, -JUMP_V);
-      puppetJumpLatch = true;
-    }
-    if (!masterJump) puppetJumpLatch = false;
-
-    stepTileAabbPhysics(body, physState, dt, isSolidTile, world, physTune);
-
-    if (physState.hitLeft || physState.hitRight) body.vx = 0;
-
-    const adx = body.x - x0;
-    const ady = body.y - y0;
-
-    if (adx < -0.01) facing = -1;
-    else if (adx > 0.01) facing = 1;
-
-    const vxActual = dt > 0 ? (adx / dt) : 0;
-
-    postPhysicsStateUpdate(dt, vxActual);
-    tickAnim(dt);
-
-    void ady;
+  // Jump inherit (unchanged)
+  if (masterJump && !puppetJumpLatch) {
+    body.vy = Math.min(body.vy, -JUMP_V);
+    puppetJumpLatch = true;
   }
+  if (!masterJump) puppetJumpLatch = false;
+
+  // Physics
+  stepTileAabbPhysics(body, physState, dt, isSolidTile, world, physTune);
+
+  // Ground grace
+  if (physState.grounded) groundGrace = GROUND_GRACE_T;
+  else groundGrace = Math.max(0, groundGrace - dt);
+  const groundedStableNow = physState.grounded || groundGrace > 0;
+
+  // Wall stop (does NOT affect direction)
+  if (physState.hitLeft || physState.hitRight) {
+    body.vx = 0;
+  }
+
+  // Facing = intent, never physics
+  face.tick(dt, body.vx, dir);
+
+  // Animation
+  if (!groundedStableNow) {
+    puppetWalking = false;
+    puppetWalkHold = 0;
+    setState("airFlap");
+  } else if (dir === 0) {
+    puppetWalking = false;
+    setState("groundIdle");
+  } else {
+    puppetWalking = true;
+    setState("groundWalk");
+  }
+
+  tickAnim(dt);
+  void _masterDy;
+  syncDbg();
+}
 
   function draw(ctx: CanvasRenderingContext2D, cam: { x: number; y: number }) {
     ctx.imageSmoothingEnabled = false;
@@ -286,12 +457,11 @@ export async function createGooseEntity(opts?: {
     const rx = body.x - cam.x;
     const ry = body.y - cam.y;
 
-    // Goose stays exactly as before.
-    // Gooselings use sticky snap to avoid boundary flicker from tiny collision nudges.
     const snapped = controllable ? { x: rx | 0, y: ry | 0 } : sticky.snap(rx, ry);
-
     const dx = snapped.x;
     const dy = snapped.y;
+
+    const facing = face.get();
 
     if (facing === 1) {
       ctx.drawImage(img, dx, dy);
@@ -304,27 +474,52 @@ export async function createGooseEntity(opts?: {
     }
   }
 
-  return {
-    get x() { return body.x; },
-    set x(v: number) { body.x = v; },
+  const api: any = {
+    get x() {
+      return body.x;
+    },
+    set x(v: number) {
+      body.x = v;
+    },
 
-    get y() { return body.y; },
-    set y(v: number) { body.y = v; },
+    get y() {
+      return body.y;
+    },
+    set y(v: number) {
+      body.y = v;
+    },
 
     w: OUT_W,
     h: OUT_H,
 
-    get vx() { return body.vx; },
-    set vx(v: number) { body.vx = v; },
+    get vx() {
+      return body.vx;
+    },
+    set vx(v: number) {
+      body.vx = v;
+    },
 
-    get vy() { return body.vy; },
-    set vy(v: number) { body.vy = v; },
+    get vy() {
+      return body.vy;
+    },
+    set vy(v: number) {
+      body.vy = v;
+    },
 
-    get grounded() { return physState.grounded; },
-    set grounded(v: boolean) { physState.grounded = v; },
+    get grounded() {
+      return physState.grounded;
+    },
+    set grounded(v: boolean) {
+      physState.grounded = v;
+    },
 
     update,
     puppetStep,
     draw,
+
+    _dbg: dbg,
   };
+
+  syncDbg();
+  return api as Player;
 }

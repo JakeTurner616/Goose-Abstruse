@@ -56,7 +56,7 @@ export type Game = {
   draw(offCtx: CanvasRenderingContext2D, vw: number, vh: number): void;
 };
 
-// --- replace these helpers + separatePair with this version
+// --- replace separatePair + resolveEntityCollisions with this version
 
 const COLLIDER_FRAC = 16 / 64;
 const COLLIDER_MIN = 4;
@@ -71,7 +71,24 @@ function entityCollider(p: Player): CAABB {
   return { x: cx, y: cy, w: cw, h: ch };
 }
 
-function separatePair(a: Player, b: Player, worldW: number, worldH: number) {
+// small stable hash for pair tie-breaks
+function pairHash(i: number, j: number) {
+  // order-independent
+  const a = i < j ? i : j;
+  const b = i < j ? j : i;
+  let h = (a * 73856093) ^ (b * 19349663);
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h;
+}
+
+function separatePair(
+  a: Player,
+  b: Player,
+  i: number,
+  j: number,
+  worldW: number,
+  worldH: number
+) {
   const A = entityCollider(a);
   const B = entityCollider(b);
 
@@ -80,38 +97,60 @@ function separatePair(a: Player, b: Player, worldW: number, worldH: number) {
   const bx2 = B.x + B.w;
   const by2 = B.y + B.h;
 
-  if (ax2 <= B.x || bx2 <= A.x || ay2 <= B.y || by2 <= A.y) return;
+  if (ax2 <= B.x || bx2 <= A.x || ay2 <= B.y || by2 <= A.y) return false;
 
-  // overlap as float (no ceil)
   const ox = Math.min(ax2, bx2) - Math.max(A.x, B.x);
   const oy = Math.min(ay2, by2) - Math.max(A.y, B.y);
-  if (ox <= 0 || oy <= 0) return;
+  if (ox <= 0 || oy <= 0) return false;
 
-  // “slop” prevents constant micro-corrections that shimmer/ghost
+  // slop helps reduce shimmer, but we must still resolve perfect overlaps.
   const SLOP = 0.15;
-  const oxs = ox - SLOP;
-  const oys = oy - SLOP;
-  if (oxs <= 0 && oys <= 0) return;
+  let oxs = ox - SLOP;
+  let oys = oy - SLOP;
+
+  // If we're *exactly* overlapping, oxs/oys can be tiny or equal; ensure we push.
+  // (This prevents “stuck together forever” at same spawn.)
+  const MIN_PUSH = 0.25;
+  if (oxs < MIN_PUSH) oxs = MIN_PUSH;
+  if (oys < MIN_PUSH) oys = MIN_PUSH;
 
   const acx = A.x + A.w * 0.5;
   const bcx = B.x + B.w * 0.5;
   const acy = A.y + A.h * 0.5;
   const bcy = B.y + B.h * 0.5;
 
-  if (oxs > 0 && (oxs < oys || oys <= 0)) {
-    // separate along X
-    const dir = acx < bcx ? -1 : 1;
+  // primary separation normal from center delta
+  let dx = acx - bcx;
+  let dy = acy - bcy;
+
+  // tie-break: if centers coincide (or almost), use deterministic per-pair direction
+  const EPS = 1e-6;
+  if (Math.abs(dx) < EPS && Math.abs(dy) < EPS) {
+    const h = pairHash(i, j);
+    dx = (h & 1) ? 1 : -1;
+    dy = (h & 2) ? 1 : -1;
+  }
+
+  // choose axis:
+  // - prefer smaller penetration
+  // - if close/equal, use which delta component is larger
+  const AXIS_EPS = 0.01;
+  const chooseX =
+    oxs + AXIS_EPS < oys ? true :
+    oys + AXIS_EPS < oxs ? false :
+    Math.abs(dx) >= Math.abs(dy); // tie-break when overlaps ~equal
+
+  if (chooseX) {
+    const dir = dx < 0 ? -1 : 1;
     const push = oxs * 0.5;
 
     a.x = clamp(a.x + dir * push, 0, worldW - a.w);
     b.x = clamp(b.x - dir * push, 0, worldW - b.w);
 
-    // small damping so they don't keep re-penetrating
     a.vx *= 0.6;
     b.vx *= 0.6;
-  } else if (oys > 0) {
-    // separate along Y
-    const dir = acy < bcy ? -1 : 1;
+  } else {
+    const dir = dy < 0 ? -1 : 1;
     const push = oys * 0.5;
 
     a.y = clamp(a.y + dir * push, 0, worldH - a.h);
@@ -120,16 +159,29 @@ function separatePair(a: Player, b: Player, worldW: number, worldH: number) {
     a.vy *= 0.6;
     b.vy *= 0.6;
   }
+
+  return true;
 }
 
 function resolveEntityCollisions(entities: Player[], worldW: number, worldH: number) {
-  // one pass is usually enough once separation is stable
-  for (let i = 0; i < entities.length; i++) {
-    for (let j = i + 1; j < entities.length; j++) {
-      separatePair(entities[i], entities[j], worldW, worldH);
+  // Iterating makes stacks converge; critical when many entities overlap.
+  const ITERS = 4;
+
+  for (let it = 0; it < ITERS; it++) {
+    let any = false;
+
+    for (let i = 0; i < entities.length; i++) {
+      for (let j = i + 1; j < entities.length; j++) {
+        if (separatePair(entities[i], entities[j], i, j, worldW, worldH)) {
+          any = true;
+        }
+      }
     }
+
+    if (!any) break;
   }
 }
+
 
 export async function createGame(vw: number, vh: number): Promise<Game> {
   const cam: Cam = { x: 0, y: 0 };
@@ -208,72 +260,67 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
 
   updateCamera();
 
-  function update(dt: number, keys: Keys) {
-    if (!player) return;
+ function update(dt: number, keys: Keys) {
+  if (!player) return;
 
-    const allEntities: Player[] = [player, ...gooselings];
+  const allEntities: Player[] = [player, ...gooselings];
 
-    if (world) {
-      const ww = world.map.w * world.map.tw;
-      const wh = world.map.h * world.map.th;
+  // --- MASTER INTENT (use input, not displacement)
+  const intentX = (keys.left ? -1 : 0) + (keys.right ? 1 : 0);
+  const intentY = (keys.up ? -1 : 0) + (keys.down ? 1 : 0); // currently unused, but kept symmetric
 
-      const worldInfo = {
-        w: ww,
-        h: wh,
-        tw: world.map.tw,
-        th: world.map.th,
-        tilesW: world.map.w,
-        tilesH: world.map.h,
-      };
+  if (world) {
+    const ww = world.map.w * world.map.tw;
+    const wh = world.map.h * world.map.th;
 
-      // Capture master motion + jump event (RAW subpixel, do not quantize!)
-      const px0 = player.x;
-      const py0 = player.y;
-      const pvy0 = player.vy;
+    const worldInfo = {
+      w: ww,
+      h: wh,
+      tw: world.map.tw,
+      th: world.map.th,
+      tilesW: world.map.w,
+      tilesH: world.map.h,
+    };
 
-      player.update(dt, keys, isSolidTile, worldInfo);
+    // Capture jump event
+    const pvy0 = player.vy;
 
-      const mdx = player.x - px0;
-      const mdy = player.y - py0;
+    player.update(dt, keys, isSolidTile, worldInfo);
 
-      // True jump start this frame: vy flipped to negative
-      const masterJump = (pvy0 >= 0 && player.vy < 0);
+    // True jump start this frame: vy flipped to negative
+    const masterJump = (pvy0 >= 0 && player.vy < 0);
 
-      for (const b of gooselings) {
-        b.puppetStep(dt, mdx, mdy, masterJump, isSolidTile, worldInfo);
-      }
-
-      // Prevent stacking (uses integer pushes, but positions remain subpixel-capable)
-      resolveEntityCollisions(allEntities, ww, wh);
-    } else {
-      const worldInfo = {
-        w: vw,
-        h: vh,
-        tw: 8,
-        th: 8,
-        tilesW: (vw / 8) | 0,
-        tilesH: (vh / 8) | 0,
-      };
-
-      const px0 = player.x;
-      const py0 = player.y;
-      const pvy0 = player.vy;
-
-      player.update(dt, keys, () => false, worldInfo);
-
-      const mdx = player.x - px0;
-      const mdy = player.y - py0;
-      const masterJump = (pvy0 >= 0 && player.vy < 0);
-
-      for (const b of gooselings) {
-        b.puppetStep(dt, mdx, mdy, masterJump, () => false, worldInfo);
-      }
-
-      resolveEntityCollisions(allEntities, vw, vh);
+    // IMPORTANT: puppets follow INTENT, not actual dx (dx jitters when pinned / separated)
+    for (const b of gooselings) {
+      b.puppetStep(dt, intentX, intentY, masterJump, isSolidTile, worldInfo);
     }
 
-    updateCamera();
+    resolveEntityCollisions(allEntities, ww, wh);
+  } else {
+    const worldInfo = {
+      w: vw,
+      h: vh,
+      tw: 8,
+      th: 8,
+      tilesW: (vw / 8) | 0,
+      tilesH: (vh / 8) | 0,
+    };
+
+    const pvy0 = player.vy;
+
+    player.update(dt, keys, () => false, worldInfo);
+
+    const masterJump = (pvy0 >= 0 && player.vy < 0);
+
+    for (const b of gooselings) {
+      b.puppetStep(dt, intentX, intentY, masterJump, () => false, worldInfo);
+    }
+
+    resolveEntityCollisions(allEntities, vw, vh);
   }
+
+  updateCamera();
+}
 
   function drawMap(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
     if (!world) return;

@@ -110,10 +110,6 @@ function rowSolid(
 /**
  * Kinematic move (no gravity): attempt to apply (dx,dy) with the same AABB-vs-tiles rules.
  * This is the “puppet” mover for gooselings.
- *
- * IMPORTANT:
- * - We DO NOT pixel-snap inside physics. That changes speed/feel.
- * - We only snap at render-time (drawImage at integer coords).
  */
 export function moveTileAabbKinematic(
   a: AABB,
@@ -129,7 +125,6 @@ export function moveTileAabbKinematic(
   st.hitLeft = false;
   st.hitRight = false;
 
-  // sub-step large deltas so we don’t tunnel
   const steps = clamp((Math.max(Math.abs(dx), Math.abs(dy)) / 8) | 0, 1, tuning.maxSubSteps | 0);
   const sdx = dx / steps;
   const sdy = dy / steps;
@@ -208,7 +203,7 @@ export function moveTileAabbKinematic(
       }
     }
 
-    // --- snap-down glue (helps them “stick” to their follow path)
+    // --- snap-down glue
     if (!st.grounded && sdy >= 0 && (tuning.snapDown | 0) > 0) {
       const maxDown = tuning.snapDown | 0;
       for (let d = 1; d <= maxDown; d++) {
@@ -220,26 +215,17 @@ export function moveTileAabbKinematic(
       }
     }
 
-    // World clamp (pixel bounds)
     a.x = clamp(a.x, 0, world.w - a.w);
     a.y = clamp(a.y, 0, world.h - a.h);
   }
 
-  // Final grounded check (1px below)
   if (!st.grounded) {
     st.grounded = aabbHitsSolidTiles(a.x, a.y + 1, a.w, a.h, isSolid, world);
   }
 }
 
 /**
- * Simple GB/NES-style:
- * - axis-separated AABB vs solid tile boxes
- * - tiny step-up for curbs (Mario)
- * - snap-down glue
- *
- * IMPORTANT:
- * - simulation stays subpixel (float)
- * - render snaps to integer (drawImage at integer coords)
+ * Platformer physics step.
  */
 export function stepTileAabbPhysics(
   a: AABB,
@@ -267,7 +253,6 @@ export function stepTileAabbPhysics(
     if (!aabbHitsSolidTiles(nx, a.y, a.w, a.h, isSolid, world)) {
       a.x = nx;
     } else {
-      // Step-up attempt (only if moving sideways)
       const dir = a.vx > 0 ? 1 : a.vx < 0 ? -1 : 0;
       let stepped = false;
 
@@ -286,7 +271,6 @@ export function stepTileAabbPhysics(
       }
 
       if (!stepped) {
-        // Clamp flush against the blocking tile column
         const tw = world.tw | 0;
         const left = a.x;
         const nextLeft = nx;
@@ -344,24 +328,23 @@ export function stepTileAabbPhysics(
       }
     }
 
-    // --- snap-down glue (only if not moving upward)
+    // --- snap-down glue (CRITICAL FIX: if we glue to ground, kill downward velocity)
     if (!st.grounded && a.vy >= 0 && (tuning.snapDown | 0) > 0) {
       const maxDown = tuning.snapDown | 0;
       for (let d = 1; d <= maxDown; d++) {
         if (aabbHitsSolidTiles(a.x, a.y + d, a.w, a.h, isSolid, world)) {
           a.y = (a.y + d - 1);
+          a.vy = 0;           // <-- fix: don't stay “grounded” with huge +vy
           st.grounded = true;
           break;
         }
       }
     }
 
-    // World clamp (pixel bounds)
     a.x = clamp(a.x, 0, world.w - a.w);
     a.y = clamp(a.y, 0, world.h - a.h);
   }
 
-  // Final grounded check (1px below)
   if (!st.grounded) {
     st.grounded = aabbHitsSolidTiles(a.x, a.y + 1, a.w, a.h, isSolid, world);
   }
