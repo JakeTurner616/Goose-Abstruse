@@ -1,6 +1,8 @@
 // src/game.ts
 import { loadTiled, drawTile, type TiledWorld, GID_MASK } from "./tiled";
 import { createMountainBG } from "./bgMountains";
+import { drawWaterfalls } from "./bgWaterfall";
+import { drawTilePatterns } from "./bgTilePatterns";
 import { createPlayer, createGooseEntity, type Player } from "./player";
 import type { Keys } from "./input";
 
@@ -15,15 +17,15 @@ function spawnKindFromGid(gidMasked: number, firstgid: number): SpawnKind | null
   if (gidMasked === 1) return "goose";
   if (gidMasked === 2) return "gooseling";
 
-  if (gidMasked === (firstgid >>> 0)) return "goose";            // index 1
-  if (gidMasked === ((firstgid + 1) >>> 0)) return "gooseling";  // index 2
+  if (gidMasked === (firstgid >>> 0)) return "goose"; // index 1
+  if (gidMasked === ((firstgid + 1) >>> 0)) return "gooseling"; // index 2
   return null;
 }
 
 function scanSpawnPoints(w: TiledWorld): SpawnPoint[] {
   const out: SpawnPoint[] = [];
   const { map, ts } = w;
-  const L = map.spawns;
+  const L = (map as any).spawns as Uint32Array;
 
   for (let i = 0; i < L.length; i++) {
     const gidRaw = L[i] >>> 0;
@@ -66,8 +68,8 @@ type CAABB = { x: number; y: number; w: number; h: number };
 function entityCollider(p: Player): CAABB {
   const cw = Math.max(COLLIDER_MIN, (p.w * COLLIDER_FRAC + 0.5) | 0);
   const ch = Math.max(COLLIDER_MIN, (p.h * COLLIDER_FRAC + 0.5) | 0);
-  const cx = p.x + ((p.w - cw) * 0.5);
-  const cy = p.y + ((p.h - ch) * 0.5);
+  const cx = p.x + (p.w - cw) * 0.5;
+  const cy = p.y + (p.h - ch) * 0.5;
   return { x: cx, y: cy, w: cw, h: ch };
 }
 
@@ -93,14 +95,7 @@ function separationWeights(a: Player, b: Player) {
   return { wa: 0.85, wb: 0.15 };
 }
 
-function separatePair(
-  a: Player,
-  b: Player,
-  i: number,
-  j: number,
-  worldW: number,
-  worldH: number
-) {
+function separatePair(a: Player, b: Player, i: number, j: number, worldW: number, worldH: number) {
   const A = entityCollider(a);
   const B = entityCollider(b);
 
@@ -134,15 +129,13 @@ function separatePair(
   const EPS = 1e-6;
   if (Math.abs(dx) < EPS && Math.abs(dy) < EPS) {
     const h = pairHash(i, j);
-    dx = (h & 1) ? 1 : -1;
-    dy = (h & 2) ? 1 : -1;
+    dx = h & 1 ? 1 : -1;
+    dy = h & 2 ? 1 : -1;
   }
 
   const AXIS_EPS = 0.01;
   const chooseX =
-    oxs + AXIS_EPS < oys ? true :
-    oys + AXIS_EPS < oxs ? false :
-    Math.abs(dx) >= Math.abs(dy);
+    oxs + AXIS_EPS < oys ? true : oys + AXIS_EPS < oxs ? false : Math.abs(dx) >= Math.abs(dy);
 
   const { wa, wb } = separationWeights(a, b);
 
@@ -175,9 +168,7 @@ function resolveEntityCollisions(entities: Player[], worldW: number, worldH: num
     let any = false;
     for (let i = 0; i < entities.length; i++) {
       for (let j = i + 1; j < entities.length; j++) {
-        if (separatePair(entities[i], entities[j], i, j, worldW, worldH)) {
-          any = true;
-        }
+        if (separatePair(entities[i], entities[j], i, j, worldW, worldH)) any = true;
       }
     }
     if (!any) break;
@@ -200,18 +191,21 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
   let player: Player;
   const gooselings: Player[] = [];
 
+  // local clock for animated effects (waterfall, etc.)
+  let t = 0;
+
   function isSolidTile(tx: number, ty: number) {
     if (!world) return false;
     const { map } = world;
     if (tx < 0 || ty < 0 || tx >= map.w || ty >= map.h) return true;
-    const gidRaw = map.collide[ty * map.w + tx] >>> 0;
+    const gidRaw = (map as any).collide[ty * map.w + tx] >>> 0;
     return (gidRaw & GID_MASK) !== 0;
   }
 
   function updateCamera() {
     if (!player) return;
-    const ww = world ? (world.map.w * world.map.tw) : vw;
-    const wh = world ? (world.map.h * world.map.th) : vh;
+    const ww = world ? world.map.w * world.map.tw : vw;
+    const wh = world ? world.map.h * world.map.th : vh;
 
     cam.x = ((player.x + (player.w >> 1)) - (vw >> 1)) | 0;
     cam.y = ((player.y + (player.h >> 1)) - (vh >> 1)) | 0;
@@ -222,11 +216,11 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
 
   async function spawnGooselings(points: SpawnPoint[]) {
     gooselings.length = 0;
-    const babies = points.filter(p => p.kind === "gooseling");
+    const babies = points.filter((p) => p.kind === "gooseling");
     if (!babies.length) return;
 
     const made = await Promise.all(
-      babies.map(p =>
+      babies.map((p) =>
         createGooseEntity({
           x: p.x,
           y: p.y,
@@ -250,7 +244,7 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
 
   if (world) {
     const sp = scanSpawnPoints(world);
-    const goose = sp.find(s => s.kind === "goose");
+    const goose = sp.find((s) => s.kind === "goose");
     if (goose) {
       startX = goose.x;
       startY = goose.y;
@@ -268,13 +262,16 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
   function update(dt: number, keys: Keys) {
     if (!player) return;
 
+    // advance local time (clamp huge dt spikes)
+    if (dt > 0) t += Math.min(dt, 0.05);
+
     const allEntities: Player[] = [player, ...gooselings];
 
     // --- MASTER INTENT (raw direction input)
     const intentX = (keys.left ? -1 : 0) + (keys.right ? 1 : 0);
 
-    const ww = world ? (world.map.w * world.map.tw) : vw;
-    const wh = world ? (world.map.h * world.map.th) : vh;
+    const ww = world ? world.map.w * world.map.tw : vw;
+    const wh = world ? world.map.h * world.map.th : vh;
     const tw = world ? world.map.tw : 8;
     const th = world ? world.map.th : 8;
 
@@ -290,7 +287,7 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     // Track jump trigger
     const pvy0 = player.vy;
     player.update(dt, keys, isSolidTile, worldInfo);
-    const masterJump = (pvy0 >= 0 && player.vy < 0);
+    const masterJump = pvy0 >= 0 && player.vy < 0;
 
     // --- PUPPET UPDATE
     for (const b of gooselings) {
@@ -300,16 +297,14 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     // --- COLLISION RESOLUTION
     resolveEntityCollisions(allEntities, ww, wh);
 
-    // NOTE: do NOT snap/zero velocities every frame here.
-    // Babies already pixel-lock internally; collisions can move fractionally and that's okay.
-
     updateCamera();
   }
 
   function drawMap(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
     if (!world) return;
     const { map, ts } = world;
-    const tw = map.tw, th = map.th;
+    const tw = map.tw,
+      th = map.th;
 
     const x0 = clamp((cam.x / tw) | 0, 0, map.w);
     const y0 = clamp((cam.y / th) | 0, 0, map.h);
@@ -319,8 +314,8 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     const ox = cam.x - x0 * tw;
     const oy = cam.y - y0 * th;
 
-    const tileLayer = map.tile;
-    const collideLayer = map.collide;
+    const tileLayer = (map as any).tile as Uint32Array;
+    const collideLayer = (map as any).collide as Uint32Array;
 
     for (let ty = y0; ty < y1; ty++) {
       const row = ty * map.w;
@@ -347,7 +342,21 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
   function draw(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
     offCtx.fillStyle = "#000";
     offCtx.fillRect(0, 0, vw, vh);
+
     drawMap(offCtx, vw, vh);
+
+    // Waterfall masked layer pass (layer "waterfall", local index 2)
+    if (world) {
+      drawWaterfalls(offCtx, world, cam, vw, vh, t, {
+        layerName: "waterfall",
+        localIndex: 2,
+        speed: 12,
+        foamSpeed: 6,
+      });
+
+      
+    }
+
     for (const b of gooselings) b.draw(offCtx, cam);
     player.draw(offCtx, cam);
     drawHud(offCtx);
@@ -355,8 +364,12 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
 
   return {
     cam,
-    get invert() { return invert; },
-    toggleInvert() { invert = !invert; },
+    get invert() {
+      return invert;
+    },
+    toggleInvert() {
+      invert = !invert;
+    },
     mountainBG,
     update,
     draw,
