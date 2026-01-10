@@ -7,6 +7,7 @@ import { createPlayer, createGooseEntity, type Player } from "./player";
 import type { Keys } from "./input";
 
 import { loadKeyAtlas, createKeyEntity, type KeyEntity, type KeyAtlas } from "./key";
+import { createDoorDissolve } from "./doorDissolve";
 
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
@@ -16,17 +17,12 @@ type SpawnKind = "goose" | "gooseling" | "key";
 type SpawnPoint = { kind: SpawnKind; x: number; y: number };
 
 function spawnKindFromGid(gidMasked: number, firstgid: number): SpawnKind | null {
-  // legacy (if you ever authored spawns with raw 1/2)
   if (gidMasked === 1) return "goose";
   if (gidMasked === 2) return "gooseling";
 
-  // tileset-relative indices (1-based visually, 0-based in math)
-  // index 1 -> firstgid
   if (gidMasked === (firstgid >>> 0)) return "goose"; // index 1
   if (gidMasked === ((firstgid + 1) >>> 0)) return "gooseling"; // index 2
 
-  // key spawn: tile index 9
-  // index 9 -> firstgid + (9-1) = firstgid + 8
   if (gidMasked === ((firstgid + 8) >>> 0)) return "key"; // index 9
 
   return null;
@@ -81,6 +77,18 @@ function entityCollider(p: Player): CAABB {
   const cx = p.x + (p.w - cw) * 0.5;
   const cy = p.y + (p.h - ch) * 0.5;
   return { x: cx, y: cy, w: cw, h: ch };
+}
+
+function aabbOverlaps(a: CAABB, b: CAABB) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// KeyEntity is anchored at bottom-center; its nominal untrimmed (w,h) come from atlas sourceSize.
+function keyCollider(k: KeyEntity): CAABB {
+  const s = k.scale || 1;
+  const w = k.w * s;
+  const h = k.h * s;
+  return { x: k.x - w * 0.5, y: k.y - h, w, h };
 }
 
 // small stable hash for pair tie-breaks
@@ -185,11 +193,12 @@ function resolveEntityCollisions(entities: Player[], worldW: number, worldH: num
   }
 }
 
-// IMPORTANT: snapping should never zero velocities (collision resolution may move fractionally)
 function snapToPixel(p: Player) {
   p.x = (p.x + 0.5) | 0;
   p.y = (p.y + 0.5) | 0;
 }
+
+const DOOR_LOCAL_INDEXES = [64, 65, 79, 80];
 
 export async function createGame(vw: number, vh: number): Promise<Game> {
   const cam: Cam = { x: 0, y: 0 };
@@ -201,11 +210,12 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
   let player: Player;
   const gooselings: Player[] = [];
 
-  // animated pickup: key
   let keyAtlas: KeyAtlas | null = null;
   let key: KeyEntity | null = null;
 
-  // local clock for animated effects (waterfall, etc.)
+  // door dissolve module
+  const doorFx = createDoorDissolve();
+
   let t = 0;
 
   function isSolidTile(tx: number, ty: number) {
@@ -245,12 +255,9 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     );
 
     gooselings.push(...made);
-
-    // snap once on spawn for clean initial placement
     for (const b of gooselings) snapToPixel(b);
   }
 
-  // Load player + map + key atlas in parallel (cheap + fast)
   const [p, w, ka] = await Promise.all([
     createPlayer({ x: 24, y: 24 }),
     loadTiled("/Tiled/sample-map.tmx"),
@@ -278,14 +285,12 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
 
     await spawnGooselings(sp);
 
-    // spawn key from spawns layer tile index 9 (kind === "key")
     if (keyAtlas) {
       const kp = sp.find((s) => s.kind === "key");
       if (kp) {
         const tw = world.map.tw;
         const th = world.map.th;
 
-        // KeyEntity expects its (x,y) to be the pickup's bottom-center anchor.
         key = createKeyEntity(keyAtlas, {
           x: kp.x + (tw >> 1),
           y: kp.y + th,
@@ -302,22 +307,19 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
   updateCamera();
 
   function update(dt: number, keys: Keys) {
-    if (!player) return;
+    if (!player || !world) return;
 
-    // advance local time (clamp huge dt spikes)
     if (dt > 0) t += Math.min(dt, 0.05);
-
     if (key) key.update(dt);
 
     const allEntities: Player[] = [player, ...gooselings];
 
-    // --- MASTER INTENT (raw direction input)
     const intentX = (keys.left ? -1 : 0) + (keys.right ? 1 : 0);
 
-    const ww = world ? world.map.w * world.map.tw : vw;
-    const wh = world ? world.map.h * world.map.th : vh;
-    const tw = world ? world.map.tw : 8;
-    const th = world ? world.map.th : 8;
+    const ww = world.map.w * world.map.tw;
+    const wh = world.map.h * world.map.th;
+    const tw = world.map.tw;
+    const th = world.map.th;
 
     const worldInfo = {
       w: ww,
@@ -328,18 +330,43 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
       tilesH: (wh / th) | 0,
     };
 
-    // Track jump trigger
     const pvy0 = player.vy;
     player.update(dt, keys, isSolidTile, worldInfo);
     const masterJump = pvy0 >= 0 && player.vy < 0;
 
-    // --- PUPPET UPDATE
     for (const b of gooselings) {
       b.puppetStep(dt, intentX, player.vx, masterJump, isSolidTile, worldInfo);
     }
 
-    // --- COLLISION RESOLUTION
     resolveEntityCollisions(allEntities, ww, wh);
+
+    // key pickup triggers door dissolve
+    if (key) {
+      const kA = keyCollider(key);
+      let picked = false;
+
+      for (let i = 0; i < allEntities.length; i++) {
+        if (aabbOverlaps(kA, entityCollider(allEntities[i]))) {
+          picked = true;
+          break;
+        }
+      }
+
+      if (picked) {
+        key = null;
+
+        // start dissolve (clears both tile + collide layers by default)
+        doorFx.begin(world, t, {
+          localIndexes: DOOR_LOCAL_INDEXES,
+          durationSec: 0.55,
+          minRate: 18,
+          maxRate: 140,
+        });
+      }
+    }
+
+    // animate dissolve over time
+    doorFx.step(world, dt);
 
     updateCamera();
   }
@@ -380,7 +407,10 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     const g = player?.grounded ? "G" : " ";
     const inv = invert ? "INV" : "   ";
     const cnt = gooselings.length | 0;
-    offCtx.fillText(world ? `MAP OK ${g} ${inv} BABIES:${cnt}` : "LOADING...", 4, 12);
+    const k = key ? "KEY" : "   ";
+    const pr = doorFx.progress();
+    const d = pr.active ? `D${pr.removed}/${pr.total}` : " ";
+    offCtx.fillText(world ? `MAP OK ${g} ${inv} ${k} ${d} BABIES:${cnt}` : "LOADING...", 4, 12);
   }
 
   function draw(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
@@ -397,12 +427,9 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
         foamSpeed: 6,
       });
 
-      // (optional) keep your pattern system call here if you want it visible
-      // drawTilePatterns(offCtx, world, cam, vw, vh, t, { layerName: "tile", localIndex: 3, glyph: "✦", cell: 16 });
       void drawTilePatterns;
     }
 
-    // draw pickups behind characters (or move below player.draw if you want it in front)
     if (key) key.draw(offCtx, cam);
 
     for (const b of gooselings) b.draw(offCtx, cam);
