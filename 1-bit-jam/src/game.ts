@@ -184,13 +184,10 @@ function resolveEntityCollisions(entities: Player[], worldW: number, worldH: num
   }
 }
 
+// IMPORTANT: snapping should never zero velocities (collision resolution may move fractionally)
 function snapToPixel(p: Player) {
-  const nx = (p.x + 0.5) | 0;
-  const ny = (p.y + 0.5) | 0;
-  if ((nx | 0) !== (p.x | 0)) p.vx *= 0.0;
-  if ((ny | 0) !== (p.y | 0)) p.vy *= 0.0;
-  p.x = nx;
-  p.y = ny;
+  p.x = (p.x + 0.5) | 0;
+  p.y = (p.y + 0.5) | 0;
 }
 
 export async function createGame(vw: number, vh: number): Promise<Game> {
@@ -240,6 +237,8 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     );
 
     gooselings.push(...made);
+
+    // snap once on spawn for clean initial placement
     for (const b of gooselings) snapToPixel(b);
   }
 
@@ -271,7 +270,7 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
 
     const allEntities: Player[] = [player, ...gooselings];
 
-    // --- MASTER INTENT (The raw direction input)
+    // --- MASTER INTENT (raw direction input)
     const intentX = (keys.left ? -1 : 0) + (keys.right ? 1 : 0);
 
     const ww = world ? (world.map.w * world.map.tw) : vw;
@@ -295,15 +294,14 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
 
     // --- PUPPET UPDATE
     for (const b of gooselings) {
-      // We pass intentX so babies know the player is TRYING to move
       b.puppetStep(dt, intentX, player.vx, masterJump, isSolidTile, worldInfo);
     }
 
     // --- COLLISION RESOLUTION
-    // This pushes babies away from walls and each other
     resolveEntityCollisions(allEntities, ww, wh);
 
-    for (const b of gooselings) snapToPixel(b);
+    // NOTE: do NOT snap/zero velocities every frame here.
+    // Babies already pixel-lock internally; collisions can move fractionally and that's okay.
 
     updateCamera();
   }
