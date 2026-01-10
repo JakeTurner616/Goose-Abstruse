@@ -70,12 +70,24 @@ export type Game = {
   mountainBG: ReturnType<typeof createMountainBG>;
   userGesture(): void;
 
+  /** Explicitly load a level by index (0..levels-1). Out-of-range clamps. */
+  loadLevel(i: number): void;
+  /** Convenience: load next level (wraps to 0). */
+  nextLevel(): void;
+  /** Useful for UI/debug */
+  getLevelIndex(): number;
+  getLevelCount(): number;
+
   update(dt: number, keys: Keys): void;
   draw(offCtx: CanvasRenderingContext2D, vw: number, vh: number): void;
 };
 
 export type CreateGameOpts = {
   sound?: SoundSystem; // injected shared sound system (from main)
+  /** Optional level list; defaults to a single sample map. */
+  levels?: string[];
+  /** Optional starting level index; defaults to 0. */
+  startLevel?: number;
 };
 
 // --- entity collision (revised weighting + stability)
@@ -166,8 +178,7 @@ function separatePair(a: Player, b: Player, i: number, j: number, worldW: number
   }
 
   const AXIS_EPS = 0.01;
-  const chooseX =
-    oxs + AXIS_EPS < oys ? true : oys + AXIS_EPS < oxs ? false : Math.abs(dx) >= Math.abs(dy);
+  const chooseX = oxs + AXIS_EPS < oys ? true : oys + AXIS_EPS < oxs ? false : Math.abs(dx) >= Math.abs(dy);
 
   const { wa, wb } = separationWeights(a, b);
 
@@ -221,6 +232,13 @@ const DOOR_LOCAL_INDEXES = [64, 65, 79, 80];
 
 // UI trigger tile: tileset-local index (1-based)
 const UI_TRIGGER_LOCAL_INDEX = 77;
+
+// Finish tile: tileset-local index (1-based)
+// Put your “finish line” tile on the *tile* layer (or collide layer if you want).
+const FINISH_LOCAL_INDEX = 77;
+
+// Win sequence timing
+const WIN_HOLD_SEC = 1.2;
 
 // IMPORTANT: keep this consistent with your filesystem: public/Sounds/*.json
 const SFX_PATHS: Record<string, string> = {
@@ -299,6 +317,7 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     else if (name === "doorOpen") sfx.playPreset("powerUp", opts2);
     else if (name === "bump") sfx.playPreset("hitHurt", opts2);
     else if (name === "invert") sfx.playPreset("blipSelect", opts2);
+    else if (name === "uiConfirm") sfx.playPreset("powerUp", opts2);
     else sfx.playPreset("click", opts2);
   }
 
@@ -313,6 +332,22 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
       fallbackPlay(name, opts2);
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Level system
+  // ---------------------------------------------------------------------------
+  const LEVELS = (opts?.levels?.length
+  ? opts.levels
+  : ["/Tiled/level1.tmx", "/Tiled/level1 copy.tmx"]).slice();
+  let levelIndex = clamp(opts?.startLevel ?? 0, 0, Math.max(0, LEVELS.length - 1)) | 0;
+
+  let loadingLevel = false;
+  let pendingLoad: Promise<void> | null = null;
+
+  // Win gate state
+  let winActive = false;
+  let winT = 0;
+  let winPlayed = false;
 
   let world: TiledWorld | null = null;
   let player: Player;
@@ -368,35 +403,70 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     for (const b of gooselings) snapToPixel(b);
   }
 
-  const [p, w, ka] = await Promise.all([
-    createPlayer({ x: 24, y: 24 }),
-    loadTiled("/Tiled/sample-map.tmx"),
-    loadKeyAtlas("/Key/").catch(() => null),
-  ]);
+  function resetWinState() {
+    winActive = false;
+    winT = 0;
+    winPlayed = false;
+  }
 
-  player = p;
-  world = w;
-  keyAtlas = ka;
+  function beginWinSequence() {
+    if (winActive) return;
+    winActive = true;
+    winT = 0;
+    winPlayed = false;
 
-  let startX = 24;
-  let startY = 0;
+    // snap everyone for clean finish, kill motion
+    const all = [player, ...gooselings];
+    for (const e of all) {
+      e.vx = 0;
+      e.vy = 0;
+      snapToPixel(e);
+    }
 
-  if (world) {
+    ui.set("LEVEL COMPLETE!");
+  }
+
+  function isEntityOnFinish(p: Player) {
+    if (!world) return false;
+    // finish tile is expected on tile layer (and/or collide if you want)
+    return aabbOverlapsTileLocalIndex(world, entityCollider(p), FINISH_LOCAL_INDEX, ["tile"]);
+  }
+
+  function allEntitiesOnFinish() {
+    if (!world) return false;
+    if (!gooselings.length) return false; // game goal implies there are goslings to round up
+    if (!isEntityOnFinish(player)) return false;
+    for (const b of gooselings) if (!isEntityOnFinish(b)) return false;
+    return true;
+  }
+
+  async function applyLoadedWorld(nextWorld: TiledWorld) {
+    world = nextWorld;
+
+    // scan spawns
     const sp = scanSpawnPoints(world);
     keysTotal = sp.filter((s) => s.kind === "key").length | 0;
-keysCollected = 0;
+    keysCollected = 0;
 
+    // player start
+    let startX = 24;
+    let startY = 0;
     const goose = sp.find((s) => s.kind === "goose");
     if (goose) {
       startX = goose.x;
       startY = goose.y;
     }
-
     player.x = startX;
     player.y = startY;
+    player.vx = 0;
+    player.vy = 0;
+    snapToPixel(player);
 
+    // babies
     await spawnGooselings(sp);
 
+    // key entity
+    key = null;
     if (keyAtlas) {
       const kp = sp.find((s) => s.kind === "key");
       if (kp) {
@@ -411,15 +481,63 @@ keysCollected = 0;
         });
       }
     }
-  } else {
-    player.x = startX;
-    player.y = startY;
+
+    // clear fx + UI
+    doorFx.reset?.(); // if doorDissolve exposes reset; safe if undefined
+    ui.clear();
+    resetWinState();
+
+    updateCamera();
   }
 
-  updateCamera();
+  function loadLevel(i: number) {
+    if (!LEVELS.length) return;
+
+    const idx = clamp(i | 0, 0, LEVELS.length - 1) | 0;
+    levelIndex = idx;
+
+    // If a load is already running, just let it finish; next request overrides index and triggers again.
+    if (loadingLevel) return;
+
+    loadingLevel = true;
+    ui.set("LOADING...");
+    resetWinState();
+
+    const url = LEVELS[levelIndex];
+
+    pendingLoad = (async () => {
+      try {
+        const next = await loadTiled(url);
+        await applyLoadedWorld(next);
+      } finally {
+        loadingLevel = false;
+        pendingLoad = null;
+      }
+    })();
+  }
+
+  function nextLevel() {
+    if (!LEVELS.length) return;
+    const ni = ((levelIndex + 1) % LEVELS.length) | 0;
+    loadLevel(ni);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Initial boot
+  // ---------------------------------------------------------------------------
+  const [p, firstWorld, ka] = await Promise.all([
+    createPlayer({ x: 24, y: 24 }),
+    loadTiled(LEVELS[levelIndex]),
+    loadKeyAtlas("/Key/").catch(() => null),
+  ]);
+
+  player = p;
+  keyAtlas = ka;
+
+  await applyLoadedWorld(firstWorld);
 
   function update(dt: number, keys: Keys) {
-    if (!player || !world) return;
+    if (!player) return;
 
     // unlock audio on any gameplay input
     if (keys.a || keys.b || keys.start || keys.select || keys.left || keys.right || keys.up || keys.down) {
@@ -427,6 +545,51 @@ keysCollected = 0;
     }
 
     if (dt > 0) t += Math.min(dt, 0.05);
+
+    // keep HUD/UI ticking during loads/win (stable)
+    ui.update(dt);
+
+    // If a level is loading, keep things quiet/stable and show HUD.
+    if (loadingLevel || !world) {
+      hud.setCounts({
+        goslings: gooselings.length | 0,
+        keysCur: keysCollected | 0,
+        keysTotal: keysTotal | 0,
+      });
+      hud.update(dt);
+      return;
+    }
+
+    // Win sequence: freeze gameplay, play a short “win” hold, then advance.
+    if (winActive) {
+      winT += dt;
+
+      if (!winPlayed) {
+        winPlayed = true;
+        play("uiConfirm", { volume: 0.65, minGapMs: 120 });
+      }
+
+      // keep key anim alive if present (nice polish)
+      if (key) key.update(dt);
+
+      // keep HUD alive
+      hud.setCounts({
+        goslings: gooselings.length | 0,
+        keysCur: keysCollected | 0,
+        keysTotal: keysTotal | 0,
+      });
+      hud.update(dt);
+
+      updateCamera();
+
+      if (winT >= WIN_HOLD_SEC) {
+        ui.clear();
+        nextLevel();
+      }
+      return;
+    }
+
+    // normal update path
     if (key) key.update(dt);
 
     if (collisionSfxCooldown > 0) collisionSfxCooldown = Math.max(0, collisionSfxCooldown - dt);
@@ -465,21 +628,18 @@ keysCollected = 0;
     }
 
     // --- UI trigger: show banner while player overlaps local index 77 tiles
-    const onTrigger = aabbOverlapsTileLocalIndex(world, entityCollider(player), UI_TRIGGER_LOCAL_INDEX, [
-      "tile",
-      "collide",
-    ]);
+    const onTrigger = aabbOverlapsTileLocalIndex(world, entityCollider(player), UI_TRIGGER_LOCAL_INDEX, ["tile", "collide"]);
     if (onTrigger) ui.set("Round up the goslings! <-- / -->");
     else ui.clear();
-    ui.update(dt);
 
     // --- HUD: update in update() (prevents draw-phase state churn + keeps timing stable)
-hud.setCounts({
-  goslings: gooselings.length | 0,
-  keysCur: keysCollected | 0,
-  keysTotal: keysTotal | 0,
-});
-hud.update(dt);
+    hud.setCounts({
+      goslings: gooselings.length | 0,
+      keysCur: keysCollected | 0,
+      keysTotal: keysTotal | 0,
+    });
+    hud.update(dt);
+
     // key pickup triggers door dissolve
     if (key) {
       const kA = keyCollider(key);
@@ -492,12 +652,12 @@ hud.update(dt);
         }
       }
 
-if (picked) {
-  key = null;
-  keysCollected = (keysCollected + 1) | 0;
+      if (picked) {
+        key = null;
+        keysCollected = (keysCollected + 1) | 0;
 
-  play("keyPickup", { volume: 0.65, minGapMs: 90 });
-  play("doorOpen", { volume: 0.40, detune: +120, minGapMs: 120 });
+        play("keyPickup", { volume: 0.65, minGapMs: 90 });
+        play("doorOpen", { volume: 0.40, detune: +120, minGapMs: 120 });
 
         doorFx.begin(world, t, {
           localIndexes: DOOR_LOCAL_INDEXES,
@@ -509,6 +669,18 @@ if (picked) {
     }
 
     doorFx.step(world, dt);
+
+    // -----------------------------------------------------------------------
+    // WIN CONDITION:
+    // Player goose + ALL goslings must overlap the finish-line tile
+    // -----------------------------------------------------------------------
+    if (allEntitiesOnFinish()) {
+      beginWinSequence();
+      // early out so camera/UI reflects win immediately
+      updateCamera();
+      return;
+    }
+
     updateCamera();
   }
 
@@ -549,8 +721,6 @@ if (picked) {
     // Optional debug text underneath
     offCtx.fillStyle = invert ? "#000" : "#fff";
     offCtx.font = "10px monospace";
-
-
   }
 
   function draw(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
@@ -572,8 +742,19 @@ if (picked) {
 
     if (key) key.draw(offCtx, cam);
 
-    for (const b of gooselings) b.draw(offCtx, cam);
-    player.draw(offCtx, cam);
+    // win “celebration” render-only bob (no physics changes)
+    const bob = winActive ? (((Math.sin(winT * 10) * 2) | 0) as number) : 0;
+
+    if (bob) {
+      offCtx.save();
+      offCtx.translate(0, bob);
+      for (const b of gooselings) b.draw(offCtx, cam);
+      player.draw(offCtx, cam);
+      offCtx.restore();
+    } else {
+      for (const b of gooselings) b.draw(offCtx, cam);
+      player.draw(offCtx, cam);
+    }
 
     // UI banner
     ui.draw(offCtx, vw, vh, invert);
@@ -594,6 +775,16 @@ if (picked) {
     userGesture() {
       sfx.userGesture();
     },
+
+    loadLevel,
+    nextLevel,
+    getLevelIndex() {
+      return levelIndex | 0;
+    },
+    getLevelCount() {
+      return LEVELS.length | 0;
+    },
+
     update,
     draw,
   };
