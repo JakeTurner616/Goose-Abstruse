@@ -6,19 +6,29 @@ import { drawTilePatterns } from "./bgTilePatterns";
 import { createPlayer, createGooseEntity, type Player } from "./player";
 import type { Keys } from "./input";
 
+import { loadKeyAtlas, createKeyEntity, type KeyEntity, type KeyAtlas } from "./key";
+
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
 type Cam = { x: number; y: number };
 
-type SpawnKind = "goose" | "gooseling";
+type SpawnKind = "goose" | "gooseling" | "key";
 type SpawnPoint = { kind: SpawnKind; x: number; y: number };
 
 function spawnKindFromGid(gidMasked: number, firstgid: number): SpawnKind | null {
+  // legacy (if you ever authored spawns with raw 1/2)
   if (gidMasked === 1) return "goose";
   if (gidMasked === 2) return "gooseling";
 
+  // tileset-relative indices (1-based visually, 0-based in math)
+  // index 1 -> firstgid
   if (gidMasked === (firstgid >>> 0)) return "goose"; // index 1
   if (gidMasked === ((firstgid + 1) >>> 0)) return "gooseling"; // index 2
+
+  // key spawn: tile index 9
+  // index 9 -> firstgid + (9-1) = firstgid + 8
+  if (gidMasked === ((firstgid + 8) >>> 0)) return "key"; // index 9
+
   return null;
 }
 
@@ -191,6 +201,10 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
   let player: Player;
   const gooselings: Player[] = [];
 
+  // animated pickup: key
+  let keyAtlas: KeyAtlas | null = null;
+  let key: KeyEntity | null = null;
+
   // local clock for animated effects (waterfall, etc.)
   let t = 0;
 
@@ -236,22 +250,50 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     for (const b of gooselings) snapToPixel(b);
   }
 
-  player = await createPlayer({ x: 24, y: 24 });
-  world = await loadTiled("/Tiled/sample-map.tmx");
+  // Load player + map + key atlas in parallel (cheap + fast)
+  const [p, w, ka] = await Promise.all([
+    createPlayer({ x: 24, y: 24 }),
+    loadTiled("/Tiled/sample-map.tmx"),
+    loadKeyAtlas("/Key/").catch(() => null),
+  ]);
+
+  player = p;
+  world = w;
+  keyAtlas = ka;
 
   let startX = 24;
   let startY = 0;
 
   if (world) {
     const sp = scanSpawnPoints(world);
+
     const goose = sp.find((s) => s.kind === "goose");
     if (goose) {
       startX = goose.x;
       startY = goose.y;
     }
+
     player.x = startX;
     player.y = startY;
+
     await spawnGooselings(sp);
+
+    // spawn key from spawns layer tile index 9 (kind === "key")
+    if (keyAtlas) {
+      const kp = sp.find((s) => s.kind === "key");
+      if (kp) {
+        const tw = world.map.tw;
+        const th = world.map.th;
+
+        // KeyEntity expects its (x,y) to be the pickup's bottom-center anchor.
+        key = createKeyEntity(keyAtlas, {
+          x: kp.x + (tw >> 1),
+          y: kp.y + th,
+          scale: 1,
+          fps: 14,
+        });
+      }
+    }
   } else {
     player.x = startX;
     player.y = startY;
@@ -264,6 +306,8 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
 
     // advance local time (clamp huge dt spikes)
     if (dt > 0) t += Math.min(dt, 0.05);
+
+    if (key) key.update(dt);
 
     const allEntities: Player[] = [player, ...gooselings];
 
@@ -345,7 +389,6 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
 
     drawMap(offCtx, vw, vh);
 
-    // Waterfall masked layer pass (layer "waterfall", local index 2)
     if (world) {
       drawWaterfalls(offCtx, world, cam, vw, vh, t, {
         layerName: "waterfall",
@@ -354,11 +397,17 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
         foamSpeed: 6,
       });
 
-      
+      // (optional) keep your pattern system call here if you want it visible
+      // drawTilePatterns(offCtx, world, cam, vw, vh, t, { layerName: "tile", localIndex: 3, glyph: "✦", cell: 16 });
+      void drawTilePatterns;
     }
+
+    // draw pickups behind characters (or move below player.draw if you want it in front)
+    if (key) key.draw(offCtx, cam);
 
     for (const b of gooselings) b.draw(offCtx, cam);
     player.draw(offCtx, cam);
+
     drawHud(offCtx);
   }
 

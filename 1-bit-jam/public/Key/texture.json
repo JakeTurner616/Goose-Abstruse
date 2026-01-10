@@ -1,0 +1,663 @@
+{
+  "frames": {
+    "Key 8 - SILVER - frame0011.png": {
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 18,
+        "h": 47
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 1,
+        "y": 0,
+        "w": 18,
+        "h": 47
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0022.png": {
+      "frame": {
+        "x": 0,
+        "y": 47,
+        "w": 10,
+        "h": 47
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 5,
+        "y": 0,
+        "w": 10,
+        "h": 47
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0024.png": {
+      "frame": {
+        "x": 0,
+        "y": 94,
+        "w": 12,
+        "h": 45
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 5,
+        "y": 2,
+        "w": 12,
+        "h": 45
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0023.png": {
+      "frame": {
+        "x": 10,
+        "y": 47,
+        "w": 11,
+        "h": 44
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 5,
+        "y": 3,
+        "w": 11,
+        "h": 44
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0010.png": {
+      "frame": {
+        "x": 18,
+        "y": 0,
+        "w": 17,
+        "h": 43
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 2,
+        "y": 4,
+        "w": 17,
+        "h": 43
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0021.png": {
+      "frame": {
+        "x": 0,
+        "y": 139,
+        "w": 11,
+        "h": 43
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 4,
+        "y": 4,
+        "w": 11,
+        "h": 43
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0003.png": {
+      "frame": {
+        "x": 0,
+        "y": 182,
+        "w": 13,
+        "h": 42
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 4,
+        "y": 5,
+        "w": 13,
+        "h": 42
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0005.png": {
+      "frame": {
+        "x": 11,
+        "y": 139,
+        "w": 12,
+        "h": 42
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 4,
+        "y": 5,
+        "w": 12,
+        "h": 42
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0002.png": {
+      "frame": {
+        "x": 12,
+        "y": 91,
+        "w": 17,
+        "h": 39
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 8,
+        "w": 17,
+        "h": 39
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0009.png": {
+      "frame": {
+        "x": 23,
+        "y": 43,
+        "w": 16,
+        "h": 39
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 3,
+        "y": 8,
+        "w": 16,
+        "h": 39
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0015.png": {
+      "frame": {
+        "x": 35,
+        "y": 0,
+        "w": 13,
+        "h": 39
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 5,
+        "y": 8,
+        "w": 13,
+        "h": 39
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0004.png": {
+      "frame": {
+        "x": 0,
+        "y": 224,
+        "w": 11,
+        "h": 39
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 4,
+        "y": 8,
+        "w": 11,
+        "h": 39
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0020.png": {
+      "frame": {
+        "x": 0,
+        "y": 263,
+        "w": 9,
+        "h": 39
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 5,
+        "y": 8,
+        "w": 9,
+        "h": 39
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0001.png": {
+      "frame": {
+        "x": 0,
+        "y": 302,
+        "w": 16,
+        "h": 37
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 1,
+        "y": 10,
+        "w": 16,
+        "h": 37
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0008.png": {
+      "frame": {
+        "x": 9,
+        "y": 263,
+        "w": 16,
+        "h": 37
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 3,
+        "y": 10,
+        "w": 16,
+        "h": 37
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0012.png": {
+      "frame": {
+        "x": 11,
+        "y": 224,
+        "w": 14,
+        "h": 36
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 5,
+        "y": 11,
+        "w": 14,
+        "h": 36
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0014.png": {
+      "frame": {
+        "x": 13,
+        "y": 181,
+        "w": 12,
+        "h": 36
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 5,
+        "y": 11,
+        "w": 12,
+        "h": 36
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0017.png": {
+      "frame": {
+        "x": 23,
+        "y": 130,
+        "w": 11,
+        "h": 36
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 5,
+        "y": 11,
+        "w": 11,
+        "h": 36
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0007.png": {
+      "frame": {
+        "x": 29,
+        "y": 82,
+        "w": 12,
+        "h": 35
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 5,
+        "y": 12,
+        "w": 12,
+        "h": 35
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0019.png": {
+      "frame": {
+        "x": 39,
+        "y": 39,
+        "w": 11,
+        "h": 35
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 3,
+        "y": 12,
+        "w": 11,
+        "h": 35
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0000.png": {
+      "frame": {
+        "x": 48,
+        "y": 0,
+        "w": 14,
+        "h": 34
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 2,
+        "y": 13,
+        "w": 14,
+        "h": 34
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0016.png": {
+      "frame": {
+        "x": 0,
+        "y": 339,
+        "w": 11,
+        "h": 34
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 5,
+        "y": 13,
+        "w": 11,
+        "h": 34
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0013.png": {
+      "frame": {
+        "x": 0,
+        "y": 373,
+        "w": 14,
+        "h": 33
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 5,
+        "y": 14,
+        "w": 14,
+        "h": 33
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0006.png": {
+      "frame": {
+        "x": 11,
+        "y": 339,
+        "w": 13,
+        "h": 33
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 4,
+        "y": 14,
+        "w": 13,
+        "h": 33
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0026.png": {
+      "frame": {
+        "x": 16,
+        "y": 300,
+        "w": 12,
+        "h": 33
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 3,
+        "y": 14,
+        "w": 12,
+        "h": 33
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0018.png": {
+      "frame": {
+        "x": 25,
+        "y": 166,
+        "w": 11,
+        "h": 32
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 4,
+        "y": 15,
+        "w": 11,
+        "h": 32
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    },
+    "Key 8 - SILVER - frame0025.png": {
+      "frame": {
+        "x": 34,
+        "y": 117,
+        "w": 10,
+        "h": 31
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 5,
+        "y": 16,
+        "w": 10,
+        "h": 31
+      },
+      "sourceSize": {
+        "w": 21,
+        "h": 47
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      }
+    }
+  },
+  "meta": {
+    "app": "http://free-tex-packer.com",
+    "version": "0.6.7",
+    "image": "texture.png",
+    "format": "RGBA8888",
+    "size": {
+      "w": 62,
+      "h": 406
+    },
+    "scale": 1
+  }
+}
