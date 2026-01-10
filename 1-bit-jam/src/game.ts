@@ -23,6 +23,9 @@ type Cam = { x: number; y: number };
 type SpawnKind = "goose" | "gooseling" | "key";
 type SpawnPoint = { kind: SpawnKind; x: number; y: number };
 
+let keysTotal = 0;
+let keysCollected = 0;
+
 function spawnKindFromGid(gidMasked: number, firstgid: number): SpawnKind | null {
   if (gidMasked === 1) return "goose";
   if (gidMasked === 2) return "gooseling";
@@ -380,6 +383,8 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
 
   if (world) {
     const sp = scanSpawnPoints(world);
+    keysTotal = sp.filter((s) => s.kind === "key").length | 0;
+keysCollected = 0;
 
     const goose = sp.find((s) => s.kind === "goose");
     if (goose) {
@@ -469,12 +474,12 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     ui.update(dt);
 
     // --- HUD: update in update() (prevents draw-phase state churn + keeps timing stable)
-    hud.setCounts({
-      goslings: gooselings.length | 0,
-      keys: key ? 0 : 1, // current game only supports a single key pickup
-    });
-    hud.update(dt);
-
+hud.setCounts({
+  goslings: gooselings.length | 0,
+  keysCur: keysCollected | 0,
+  keysTotal: keysTotal | 0,
+});
+hud.update(dt);
     // key pickup triggers door dissolve
     if (key) {
       const kA = keyCollider(key);
@@ -487,11 +492,12 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
         }
       }
 
-      if (picked) {
-        key = null;
+if (picked) {
+  key = null;
+  keysCollected = (keysCollected + 1) | 0;
 
-        play("keyPickup", { volume: 0.65, minGapMs: 90 });
-        play("doorOpen", { volume: 0.40, detune: +120, minGapMs: 120 });
+  play("keyPickup", { volume: 0.65, minGapMs: 90 });
+  play("doorOpen", { volume: 0.40, detune: +120, minGapMs: 120 });
 
         doorFx.begin(world, t, {
           localIndexes: DOOR_LOCAL_INDEXES,

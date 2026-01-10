@@ -98,7 +98,7 @@ export function createUiMessageSystem(): UiMessageSystem {
     const bh = ((lines.length * lineH + padY * 2) | 0);
 
     const baseX = ((vw - bw) * 0.5 + 0.5) | 0;
-    const baseY = 6;
+    const baseY = 24;
 
     const bob = 0;
     const x = baseX;
