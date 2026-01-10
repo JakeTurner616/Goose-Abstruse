@@ -8,6 +8,7 @@ import { createMenuScene } from "./scenes/menuScene";
 import { createGameScene } from "./scenes/gameScene";
 
 import { createSoundSystem } from "./sound";
+import { createOggMusic } from "./musicOgg";
 
 const VIRTUAL_W = 160;
 const VIRTUAL_H = 144;
@@ -45,6 +46,42 @@ const sound = createSoundSystem({
   muted: false,
 });
 
+// Simple OGG music system (separate from SFX; tiny + reliable)
+const music = createOggMusic({
+  volume: Math.min(1, MASTER_VOLUME * 12), // music usually wants more than SFX
+  muted: false,
+});
+
+// ---- Audio gating: must be triggered from a real user input event
+let audioUnlocked = false;
+let wantMusic = false;
+let musicReady = false;
+
+function unlockAudioOnce() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  sound.userGesture();
+  music.userGesture();
+  tryStartMusic();
+}
+
+function tryStartMusic() {
+  if (!wantMusic) return;
+  if (!audioUnlocked) return;
+  if (!musicReady) return;
+  if (music.isPlaying()) return;
+  music.play({ loop: true, restart: true });
+}
+
+// Fire-and-forget: begin loading early (doesn't autoplay)
+music
+  .load("/Music/tix0.ogg")
+  .then(() => {
+    musicReady = true;
+    tryStartMusic(); // in case we already unlocked + want music
+  })
+  .catch(console.error);
+
 // one-frame tap/click latch (menu uses it)
 let tapPressed = false;
 canvas.addEventListener(
@@ -52,9 +89,18 @@ canvas.addEventListener(
   (e) => {
     e.preventDefault();
     tapPressed = true;
-    sound.userGesture(); // unlock audio
+    unlockAudioOnce(); // <-- critical: event-based unlock
   },
   { passive: false }
+);
+
+// Keyboard-based unlock (covers "press any key" starts)
+addEventListener(
+  "keydown",
+  () => {
+    unlockAudioOnce(); // <-- critical: event-based unlock
+  },
+  { passive: true }
 );
 
 (async () => {
@@ -96,8 +142,9 @@ canvas.addEventListener(
       start: () => {
         if (!game) return;
 
-        // Ensure audio is unlocked on “start”
-        sound.userGesture();
+        // We only request music here; actual playback waits for unlock+ready.
+        wantMusic = true;
+        tryStartMusic();
 
         mgr.set(createGameScene(game, keys));
 

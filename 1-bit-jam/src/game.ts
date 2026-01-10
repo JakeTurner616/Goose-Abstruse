@@ -13,6 +13,8 @@ import type { SoundSystem } from "./sound";
 import { createSoundSystem } from "./sound";
 import { loadSoundBank, type SoundBank } from "./soundBank";
 
+import { createUiMessageSystem } from "./uiMessage";
+
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
 type Cam = { x: number; y: number };
@@ -215,6 +217,9 @@ function snapToPixel(p: Player) {
 
 const DOOR_LOCAL_INDEXES = [64, 65, 79, 80];
 
+// UI trigger tile: tileset-local index (1-based)
+const UI_TRIGGER_LOCAL_INDEX = 77;
+
 // IMPORTANT: keep this consistent with your filesystem: public/Sounds/*.json
 const SFX_PATHS: Record<string, string> = {
   uiClick: "/Sounds/uiClick.json",
@@ -225,6 +230,48 @@ const SFX_PATHS: Record<string, string> = {
   keyPickup: "/Sounds/keyPickup.json",
   doorOpen: "/Sounds/doorOpen.json",
 };
+
+function aabbOverlapsTileLocalIndex(
+  w: TiledWorld,
+  aabb: { x: number; y: number; w: number; h: number },
+  localIndex: number,
+  layers: string[] = ["tile", "collide"]
+) {
+  const { map, ts } = w;
+  const tw = map.tw | 0;
+  const th = map.th | 0;
+
+  const x0 = (aabb.x / tw) | 0;
+  const y0 = (aabb.y / th) | 0;
+  const x1 = (((aabb.x + aabb.w - 1) / tw) | 0);
+  const y1 = (((aabb.y + aabb.h - 1) / th) | 0);
+
+  const first = ts.firstgid >>> 0;
+
+  for (const layerName of layers) {
+    const L = (map as any)[layerName] as Uint32Array | undefined;
+    if (!L) continue;
+
+    for (let ty = y0; ty <= y1; ty++) {
+      if (ty < 0 || ty >= map.h) continue;
+      const row = ty * map.w;
+
+      for (let tx = x0; tx <= x1; tx++) {
+        if (tx < 0 || tx >= map.w) continue;
+
+        const gidRaw = L[row + tx] >>> 0;
+        const gid = (gidRaw & GID_MASK) >>> 0;
+        if (!gid) continue;
+
+        // tileset-local index is 1-based
+        const li = ((gid - first + 1) | 0);
+        if (li === localIndex) return true;
+      }
+    }
+  }
+
+  return false;
+}
 
 export async function createGame(vw: number, vh: number, opts?: CreateGameOpts): Promise<Game> {
   const cam: Cam = { x: 0, y: 0 };
@@ -280,6 +327,7 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
   let key: KeyEntity | null = null;
 
   const doorFx = createDoorDissolve();
+  const ui = createUiMessageSystem();
 
   let t = 0;
   let collisionSfxCooldown = 0;
@@ -422,6 +470,17 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
       collisionSfxCooldown = 0.12;
     }
 
+    // --- UI trigger: show banner while player overlaps local index 76 tiles
+    const onTrigger = aabbOverlapsTileLocalIndex(world, entityCollider(player), UI_TRIGGER_LOCAL_INDEX, [
+      "tile",
+      "collide",
+    ]);
+
+    if (onTrigger) ui.set("Round up the goslings! <-- / -->");
+    else ui.clear();
+
+    ui.update(dt);
+
     // key pickup triggers door dissolve
     if (key) {
       const kA = keyCollider(key);
@@ -516,6 +575,9 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
 
     for (const b of gooselings) b.draw(offCtx, cam);
     player.draw(offCtx, cam);
+
+    // UI banner (retro rounded border)
+    ui.draw(offCtx, vw, vh, invert);
 
     drawHud(offCtx);
   }
