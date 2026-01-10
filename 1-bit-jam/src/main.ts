@@ -7,8 +7,13 @@ import { createSceneManager } from "./scene";
 import { createMenuScene } from "./scenes/menuScene";
 import { createGameScene } from "./scenes/gameScene";
 
+import { createSoundSystem } from "./sound";
+
 const VIRTUAL_W = 160;
 const VIRTUAL_H = 144;
+
+// Global master volume (this now DEFINITELY affects in-game SFX)
+const MASTER_VOLUME = 0.05;
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d", { alpha: false })!;
@@ -34,6 +39,12 @@ resize();
 
 const keys = createKeys();
 
+// Single shared sound system for the whole app (menu + game)
+const sound = createSoundSystem({
+  volume: MASTER_VOLUME,
+  muted: false,
+});
+
 // one-frame tap/click latch (menu uses it)
 let tapPressed = false;
 canvas.addEventListener(
@@ -41,6 +52,7 @@ canvas.addEventListener(
   (e) => {
     e.preventDefault();
     tapPressed = true;
+    sound.userGesture(); // unlock audio
   },
   { passive: false }
 );
@@ -50,7 +62,11 @@ canvas.addEventListener(
   let game: Game | null = null;
   let gameReady = false;
 
-  createGame(VIRTUAL_W, VIRTUAL_H)
+  // bind keyboard immediately so menu can use keys too.
+  // invert toggle becomes live once the game exists.
+  bindKeyboard(keys, () => game?.toggleInvert());
+
+  createGame(VIRTUAL_W, VIRTUAL_H, { sound })
     .then((g) => {
       game = g;
       gameReady = true;
@@ -79,26 +95,26 @@ canvas.addEventListener(
       canStart: () => gameReady,
       start: () => {
         if (!game) return;
+
+        // Ensure audio is unlocked on “start”
+        sound.userGesture();
+
         mgr.set(createGameScene(game, keys));
 
-        // now that game exists, wire keyboard invert + real blitter hooks
-        bindKeyboard(keys, () => game!.toggleInvert());
-
-        // patch blitter to read from the live game (cheap trick: replace closures by re-creating blitter)
+        // patch blitter to read from the live game
         const liveBlit = createOneBitBlitter({
           w: VIRTUAL_W,
           h: VIRTUAL_H,
           ctx,
           offCtx,
           mountainBG: {
-            ...game!.mountainBG,
+            ...game.mountainBG,
             sampleScreen: (x: number, y: number) => !!game!.mountainBG.sampleScreen(x, y),
           },
           getCam: () => game!.cam,
           getInvert: () => game!.invert,
         });
 
-        // swap function reference
         (blit1bit as any).__impl = liveBlit;
       },
     })

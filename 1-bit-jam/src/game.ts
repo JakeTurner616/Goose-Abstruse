@@ -9,6 +9,10 @@ import type { Keys } from "./input";
 import { loadKeyAtlas, createKeyEntity, type KeyEntity, type KeyAtlas } from "./key";
 import { createDoorDissolve } from "./doorDissolve";
 
+import type { SoundSystem } from "./sound";
+import { createSoundSystem } from "./sound";
+import { loadSoundBank, type SoundBank } from "./soundBank";
+
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
 type Cam = { x: number; y: number };
@@ -42,7 +46,7 @@ function scanSpawnPoints(w: TiledWorld): SpawnPoint[] {
     if (!kind) continue;
 
     const tx = (i % map.w) | 0;
-    const ty = ((i / map.w) | 0);
+    const ty = (i / map.w) | 0;
 
     out.push({
       kind,
@@ -60,8 +64,14 @@ export type Game = {
 
   mountainBG: ReturnType<typeof createMountainBG>;
 
+  userGesture(): void;
+
   update(dt: number, keys: Keys): void;
   draw(offCtx: CanvasRenderingContext2D, vw: number, vh: number): void;
+};
+
+export type CreateGameOpts = {
+  sound?: SoundSystem; // injected shared sound system (from main)
 };
 
 // --- entity collision (revised weighting + stability)
@@ -182,6 +192,8 @@ function separatePair(a: Player, b: Player, i: number, j: number, worldW: number
 
 function resolveEntityCollisions(entities: Player[], worldW: number, worldH: number) {
   const ITERS = 4;
+  let anyEver = false;
+
   for (let it = 0; it < ITERS; it++) {
     let any = false;
     for (let i = 0; i < entities.length; i++) {
@@ -189,8 +201,11 @@ function resolveEntityCollisions(entities: Player[], worldW: number, worldH: num
         if (separatePair(entities[i], entities[j], i, j, worldW, worldH)) any = true;
       }
     }
+    if (any) anyEver = true;
     if (!any) break;
   }
+
+  return anyEver;
 }
 
 function snapToPixel(p: Player) {
@@ -200,11 +215,62 @@ function snapToPixel(p: Player) {
 
 const DOOR_LOCAL_INDEXES = [64, 65, 79, 80];
 
-export async function createGame(vw: number, vh: number): Promise<Game> {
+// IMPORTANT: keep this consistent with your filesystem: public/Sounds/*.json
+const SFX_PATHS: Record<string, string> = {
+  uiClick: "/Sounds/uiClick.json",
+  uiConfirm: "/Sounds/uiConfirm.json",
+  invert: "/Sounds/invert.json",
+  jump: "/Sounds/jump.json",
+  bump: "/Sounds/bump.json",
+  keyPickup: "/Sounds/keyPickup.json",
+  doorOpen: "/Sounds/doorOpen.json",
+};
+
+export async function createGame(vw: number, vh: number, opts?: CreateGameOpts): Promise<Game> {
   const cam: Cam = { x: 0, y: 0 };
   let invert = false;
 
   const mountainBG = createMountainBG(vw, vh);
+
+  // ---- sound: USE injected shared sound system (from main) if provided
+  const sfx: SoundSystem = opts?.sound ?? createSoundSystem({ volume: 0.15 });
+  let bank: SoundBank | null = null;
+
+  // If any individual file fails, soundBank implementations vary:
+  // - some reject everything
+  // - some resolve but omit missing sounds
+  // So: we treat bank as “best effort” and still fallback per-sound.
+  loadSoundBank(sfx, SFX_PATHS)
+    .then((b) => {
+      bank = b;
+    })
+    .catch(() => {
+      bank = null;
+    });
+
+  function fallbackPlay(name: string, opts2?: { volume?: number; detune?: number; minGapMs?: number }) {
+    if (name === "jump") sfx.playPreset("jump", opts2);
+    else if (name === "keyPickup") sfx.playPreset("pickupCoin", opts2);
+    else if (name === "doorOpen") sfx.playPreset("powerUp", opts2);
+    else if (name === "bump") sfx.playPreset("hitHurt", opts2);
+    else if (name === "invert") sfx.playPreset("blipSelect", opts2);
+    else sfx.playPreset("click", opts2);
+  }
+
+  function play(name: string, opts2?: { volume?: number; detune?: number; minGapMs?: number }) {
+    if (!bank) {
+      fallbackPlay(name, opts2);
+      return;
+    }
+
+    // Bank exists, but the sound may still be missing depending on loadSoundBank behavior.
+    // If bank.play throws, we fallback.
+    try {
+      bank.play(name, opts2);
+    } catch {
+      fallbackPlay(name, opts2);
+    }
+  }
 
   let world: TiledWorld | null = null;
   let player: Player;
@@ -213,10 +279,10 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
   let keyAtlas: KeyAtlas | null = null;
   let key: KeyEntity | null = null;
 
-  // door dissolve module
   const doorFx = createDoorDissolve();
 
   let t = 0;
+  let collisionSfxCooldown = 0;
 
   function isSolidTile(tx: number, ty: number) {
     if (!world) return false;
@@ -309,8 +375,15 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
   function update(dt: number, keys: Keys) {
     if (!player || !world) return;
 
+    // unlock audio on any gameplay input
+    if (keys.a || keys.b || keys.start || keys.select || keys.left || keys.right || keys.up || keys.down) {
+      sfx.userGesture();
+    }
+
     if (dt > 0) t += Math.min(dt, 0.05);
     if (key) key.update(dt);
+
+    if (collisionSfxCooldown > 0) collisionSfxCooldown = Math.max(0, collisionSfxCooldown - dt);
 
     const allEntities: Player[] = [player, ...gooselings];
 
@@ -324,8 +397,8 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     const worldInfo = {
       w: ww,
       h: wh,
-      tw: tw,
-      th: th,
+      tw,
+      th,
       tilesW: (ww / tw) | 0,
       tilesH: (wh / th) | 0,
     };
@@ -334,11 +407,20 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     player.update(dt, keys, isSolidTile, worldInfo);
     const masterJump = pvy0 >= 0 && player.vy < 0;
 
+    if (masterJump) {
+      // This should now play /Sounds/jump.json once bank loads.
+      play("jump", { volume: 0.55, minGapMs: 40 });
+    }
+
     for (const b of gooselings) {
       b.puppetStep(dt, intentX, player.vx, masterJump, isSolidTile, worldInfo);
     }
 
-    resolveEntityCollisions(allEntities, ww, wh);
+    const collided = resolveEntityCollisions(allEntities, ww, wh);
+    if (collided && collisionSfxCooldown === 0) {
+      play("bump", { volume: 0.18, detune: -180, minGapMs: 70 });
+      collisionSfxCooldown = 0.12;
+    }
 
     // key pickup triggers door dissolve
     if (key) {
@@ -355,7 +437,9 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
       if (picked) {
         key = null;
 
-        // start dissolve (clears both tile + collide layers by default)
+        play("keyPickup", { volume: 0.65, minGapMs: 90 });
+        play("doorOpen", { volume: 0.40, detune: +120, minGapMs: 120 });
+
         doorFx.begin(world, t, {
           localIndexes: DOOR_LOCAL_INDEXES,
           durationSec: 0.55,
@@ -365,17 +449,15 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
       }
     }
 
-    // animate dissolve over time
     doorFx.step(world, dt);
-
     updateCamera();
   }
 
   function drawMap(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
     if (!world) return;
     const { map, ts } = world;
-    const tw = map.tw,
-      th = map.th;
+    const tw = map.tw;
+    const th = map.th;
 
     const x0 = clamp((cam.x / tw) | 0, 0, map.w);
     const y0 = clamp((cam.y / th) | 0, 0, map.h);
@@ -445,8 +527,12 @@ export async function createGame(vw: number, vh: number): Promise<Game> {
     },
     toggleInvert() {
       invert = !invert;
+      play("invert", { volume: 0.20, detune: invert ? +160 : -160, minGapMs: 60 });
     },
     mountainBG,
+    userGesture() {
+      sfx.userGesture();
+    },
     update,
     draw,
   };
