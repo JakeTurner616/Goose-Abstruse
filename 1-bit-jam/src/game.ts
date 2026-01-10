@@ -156,57 +156,37 @@ function separatePair(a: Player, b: Player, i: number, j: number, worldW: number
 
   const SLOP = 0.15;
   let oxs = ox - SLOP;
-  let oys = oy - SLOP;
 
   const MIN_PUSH = 0.25;
   if (oxs < MIN_PUSH) oxs = MIN_PUSH;
-  if (oys < MIN_PUSH) oys = MIN_PUSH;
 
   const acx = A.x + A.w * 0.5;
   const bcx = B.x + B.w * 0.5;
-  const acy = A.y + A.h * 0.5;
-  const bcy = B.y + B.h * 0.5;
 
   let dx = acx - bcx;
-  let dy = acy - bcy;
 
   const EPS = 1e-6;
-  if (Math.abs(dx) < EPS && Math.abs(dy) < EPS) {
+  if (Math.abs(dx) < EPS) {
     const h = pairHash(i, j);
     dx = h & 1 ? 1 : -1;
-    dy = h & 2 ? 1 : -1;
   }
-
-  const AXIS_EPS = 0.01;
-  const chooseX = oxs + AXIS_EPS < oys ? true : oys + AXIS_EPS < oxs ? false : Math.abs(dx) >= Math.abs(dy);
 
   const { wa, wb } = separationWeights(a, b);
 
-  if (chooseX) {
-    const dir = dx < 0 ? -1 : 1;
-    const push = oxs;
+  const dir = dx < 0 ? -1 : 1;
+  const push = oxs;
 
-    if (wa) a.x = clamp(a.x + dir * push * wa, 0, worldW - a.w);
-    if (wb) b.x = clamp(b.x - dir * push * wb, 0, worldW - b.w);
+  if (wa) a.x = clamp(a.x + dir * push * wa, 0, worldW - a.w);
+  if (wb) b.x = clamp(b.x - dir * push * wb, 0, worldW - b.w);
 
-    if (wa) a.vx *= 0.6;
-    if (wb) b.vx *= 0.6;
-  } else {
-    const dir = dy < 0 ? -1 : 1;
-    const push = oys;
-
-    if (wa) a.y = clamp(a.y + dir * push * wa, 0, worldH - a.h);
-    if (wb) b.y = clamp(b.y - dir * push * wb, 0, worldH - b.h);
-
-    if (wa) a.vy *= 0.6;
-    if (wb) b.vy *= 0.6;
-  }
+  if (wa) a.vx *= 0.6;
+  if (wb) b.vx *= 0.6;
 
   return true;
 }
 
 function resolveEntityCollisions(entities: Player[], worldW: number, worldH: number) {
-  const ITERS = 4;
+  const ITERS = 1;
   let anyEver = false;
 
   for (let it = 0; it < ITERS; it++) {
@@ -216,7 +196,7 @@ function resolveEntityCollisions(entities: Player[], worldW: number, worldH: num
         if (separatePair(entities[i], entities[j], i, j, worldW, worldH)) any = true;
       }
     }
-    if (any) anyEver = true;
+
     if (!any) break;
   }
 
