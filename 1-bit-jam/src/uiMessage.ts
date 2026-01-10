@@ -100,7 +100,7 @@ export function createUiMessageSystem(): UiMessageSystem {
     const baseX = ((vw - bw) * 0.5 + 0.5) | 0;
     const baseY = 6;
 
-    const bob = ((Math.sin(s.bobT * 2) * 0.75) + 0.5) | 0;
+    const bob = 0;
     const x = baseX;
     const y = (baseY + bob) | 0;
 

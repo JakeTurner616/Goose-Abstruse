@@ -14,6 +14,7 @@ import { createSoundSystem } from "./sound";
 import { loadSoundBank, type SoundBank } from "./soundBank";
 
 import { createUiMessageSystem } from "./uiMessage";
+import { createUiHudSystem } from "./uiHud";
 
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
@@ -30,7 +31,6 @@ function spawnKindFromGid(gidMasked: number, firstgid: number): SpawnKind | null
   if (gidMasked === ((firstgid + 1) >>> 0)) return "gooseling"; // index 2
 
   if (gidMasked === ((firstgid + 8) >>> 0)) return "key"; // index 9
-
   return null;
 }
 
@@ -65,7 +65,6 @@ export type Game = {
   toggleInvert(): void;
 
   mountainBG: ReturnType<typeof createMountainBG>;
-
   userGesture(): void;
 
   update(dt: number, keys: Keys): void;
@@ -283,10 +282,6 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
   const sfx: SoundSystem = opts?.sound ?? createSoundSystem({ volume: 0.15 });
   let bank: SoundBank | null = null;
 
-  // If any individual file fails, soundBank implementations vary:
-  // - some reject everything
-  // - some resolve but omit missing sounds
-  // So: we treat bank as “best effort” and still fallback per-sound.
   loadSoundBank(sfx, SFX_PATHS)
     .then((b) => {
       bank = b;
@@ -309,9 +304,6 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
       fallbackPlay(name, opts2);
       return;
     }
-
-    // Bank exists, but the sound may still be missing depending on loadSoundBank behavior.
-    // If bank.play throws, we fallback.
     try {
       bank.play(name, opts2);
     } catch {
@@ -328,6 +320,7 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
 
   const doorFx = createDoorDissolve();
   const ui = createUiMessageSystem();
+  const hud = createUiHudSystem(); // FIX: create once, update in update()
 
   let t = 0;
   let collisionSfxCooldown = 0;
@@ -434,7 +427,6 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     if (collisionSfxCooldown > 0) collisionSfxCooldown = Math.max(0, collisionSfxCooldown - dt);
 
     const allEntities: Player[] = [player, ...gooselings];
-
     const intentX = (keys.left ? -1 : 0) + (keys.right ? 1 : 0);
 
     const ww = world.map.w * world.map.tw;
@@ -455,10 +447,7 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     player.update(dt, keys, isSolidTile, worldInfo);
     const masterJump = pvy0 >= 0 && player.vy < 0;
 
-    if (masterJump) {
-      // This should now play /Sounds/jump.json once bank loads.
-      play("jump", { volume: 0.55, minGapMs: 40 });
-    }
+    if (masterJump) play("jump", { volume: 0.55, minGapMs: 40 });
 
     for (const b of gooselings) {
       b.puppetStep(dt, intentX, player.vx, masterJump, isSolidTile, worldInfo);
@@ -470,16 +459,21 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
       collisionSfxCooldown = 0.12;
     }
 
-    // --- UI trigger: show banner while player overlaps local index 76 tiles
+    // --- UI trigger: show banner while player overlaps local index 77 tiles
     const onTrigger = aabbOverlapsTileLocalIndex(world, entityCollider(player), UI_TRIGGER_LOCAL_INDEX, [
       "tile",
       "collide",
     ]);
-
     if (onTrigger) ui.set("Round up the goslings! <-- / -->");
     else ui.clear();
-
     ui.update(dt);
+
+    // --- HUD: update in update() (prevents draw-phase state churn + keeps timing stable)
+    hud.setCounts({
+      goslings: gooselings.length | 0,
+      keys: key ? 0 : 1, // current game only supports a single key pickup
+    });
+    hud.update(dt);
 
     // key pickup triggers door dissolve
     if (key) {
@@ -543,15 +537,14 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
   }
 
   function drawHud(offCtx: CanvasRenderingContext2D) {
+    // New HUD (pixel-stable)
+    hud.draw(offCtx, vw, vh, invert);
+
+    // Optional debug text underneath
     offCtx.fillStyle = invert ? "#000" : "#fff";
     offCtx.font = "10px monospace";
-    const g = player?.grounded ? "G" : " ";
-    const inv = invert ? "INV" : "   ";
-    const cnt = gooselings.length | 0;
-    const k = key ? "KEY" : "   ";
-    const pr = doorFx.progress();
-    const d = pr.active ? `D${pr.removed}/${pr.total}` : " ";
-    offCtx.fillText(world ? `MAP OK ${g} ${inv} ${k} ${d} BABIES:${cnt}` : "LOADING...", 4, 12);
+
+
   }
 
   function draw(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
@@ -576,7 +569,7 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     for (const b of gooselings) b.draw(offCtx, cam);
     player.draw(offCtx, cam);
 
-    // UI banner (retro rounded border)
+    // UI banner
     ui.draw(offCtx, vw, vh, invert);
 
     drawHud(offCtx);

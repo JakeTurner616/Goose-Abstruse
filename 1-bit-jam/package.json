@@ -13,6 +13,7 @@
     "vite": "^7.2.4"
   },
   "dependencies": {
-    "jsfxr": "^1.3.0"
+    "jsfxr": "^1.3.0",
+    "pngjs": "^7.0.0"
   }
 }
