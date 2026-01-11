@@ -351,16 +351,17 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     return (gidRaw & GID_MASK) !== 0;
   }
 
-  function updateCamera() {
+function updateCamera() {
     if (!player) return;
     const ww = world ? world.map.w * world.map.tw : vw;
     const wh = world ? world.map.h * world.map.th : vh;
 
-    cam.x = ((player.x + (player.w >> 1)) - (vw >> 1)) | 0;
-    cam.y = ((player.y + (player.h >> 1)) - (vh >> 1)) | 0;
+    // Use Math.floor to ensure negative coordinates don't flip rounding direction
+    let targetX = (player.x + (player.w >> 1)) - (vw >> 1);
+    let targetY = (player.y + (player.h >> 1)) - (vh >> 1);
 
-    cam.x = clamp(cam.x, 0, Math.max(0, ww - vw));
-    cam.y = clamp(cam.y, 0, Math.max(0, wh - vh));
+    cam.x = Math.floor(clamp(targetX, 0, Math.max(0, ww - vw)));
+    cam.y = Math.floor(clamp(targetY, 0, Math.max(0, wh - vh)));
   }
 
   async function spawnGooselings(points: SpawnPoint[]) {
@@ -664,28 +665,33 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     updateCamera();
   }
 
-  function drawMap(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
+ function drawMap(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
     if (!world) return;
     const { map, ts } = world;
     const tw = map.tw;
     const th = map.th;
 
-    const x0 = clamp((cam.x / tw) | 0, 0, map.w);
-    const y0 = clamp((cam.y / th) | 0, 0, map.h);
-    const x1 = clamp(((cam.x + vw + tw - 1) / tw) | 0, 0, map.w);
-    const y1 = clamp(((cam.y + vh + th - 1) / th) | 0, 0, map.h);
+    // Use floored camera values for index calculation
+    const cx = Math.floor(cam.x);
+    const cy = Math.floor(cam.y);
 
-    const ox = cam.x - x0 * tw;
-    const oy = cam.y - y0 * th;
+    const x0 = clamp((cx / tw) | 0, 0, map.w);
+    const y0 = clamp((cy / th) | 0, 0, map.h);
+    const x1 = clamp(((cx + vw + tw) / tw) | 0, 0, map.w);
+    const y1 = clamp(((cy + vh + th) / th) | 0, 0, map.h);
+
+    // This 'ox' and 'oy' must be integers to keep tiles on the grid
+    const ox = (cx - x0 * tw) | 0;
+    const oy = (cy - y0 * th) | 0;
 
     const tileLayer = (map as any).tile as Uint32Array;
     const collideLayer = (map as any).collide as Uint32Array;
 
     for (let ty = y0; ty < y1; ty++) {
       const row = ty * map.w;
-      const dy = ((ty - y0) * th - oy) | 0;
+      const dy = ((ty - y0) * th - oy) | 0; // Integer
       for (let tx = x0; tx < x1; tx++) {
-        const dx = ((tx - x0) * tw - ox) | 0;
+        const dx = ((tx - x0) * tw - ox) | 0; // Integer
         const gidA = tileLayer[row + tx] >>> 0;
         if ((gidA & GID_MASK) !== 0) drawTile(offCtx, ts, gidA, dx, dy);
         const gidB = collideLayer[row + tx] >>> 0;
