@@ -15,6 +15,15 @@ const snapBakeSize = (px: number) => (px >= 30 ? 32 : px >= 22 ? 24 : px >= 14 ?
 // Small threshold so we don't "walk" when vx got killed by collision but input is held.
 const MOVE_EPS = 0.75;
 
+// Only consider unstick while clearly falling.
+const FALL_UNSTICK_VY = 8;
+
+// How long we must be "caught" (falling + side hit + no downward progress) before nudging.
+const WALL_CATCH_T = 0.055;
+
+// After we nudge, wait a moment before allowing another nudge (prevents oscillation).
+const WALL_UNSTICK_COOLDOWN_T = 0.10;
+
 // facing with hysteresis + cooldown (prevents rapid flip noise)
 function makeFacing(initial: 1 | -1 = 1) {
   let f = initial;
@@ -72,12 +81,87 @@ function isPushingWall(a: AABB, dir: -1 | 1, solid: SolidTileQuery, world: World
   return solid(tx, tyMid);
 }
 
-// Pixel snapping belongs in render, but you're intentionally snapping bodies to integers for 1-bit stability.
-// Round correctly for negative values too.
+// You're intentionally snapping bodies to integers for 1-bit stability.
 const snapBody = (b: AABB) => {
   b.x = Math.round(b.x);
   b.y = Math.round(b.y);
 };
+
+function hitsAabb(x: number, y: number, w: number, h: number, solid: SolidTileQuery, world: WorldInfo) {
+  const tw = world.tw | 0,
+    th = world.th | 0;
+
+  const x0 = (x / tw) | 0;
+  const y0 = (y / th) | 0;
+  const x1 = ((x + w - 1) / tw) | 0;
+  const y1 = ((y + h - 1) / th) | 0;
+
+  for (let ty = y0; ty <= y1; ty++) {
+    for (let tx = x0; tx <= x1; tx++) {
+      if (solid(tx, ty)) return true;
+    }
+  }
+  return false;
+}
+
+function tryNudgeAwayFromWall(body: AABB, st: PhysicsState, solid: SolidTileQuery, world: WorldInfo) {
+  // Prefer moving away from the contacted side.
+  if (st.hitLeft) {
+    const nx = Math.min(world.w - body.w, body.x + 1);
+    if (nx !== body.x && !hitsAabb(nx, body.y, body.w, body.h, solid, world)) {
+      body.x = nx;
+      st.hitLeft = false;
+      return true;
+    }
+  }
+
+  if (st.hitRight) {
+    const nx = Math.max(0, body.x - 1);
+    if (nx !== body.x && !hitsAabb(nx, body.y, body.w, body.h, solid, world)) {
+      body.x = nx;
+      st.hitRight = false;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// Only unstick when we detect a *corner catch*:
+// falling + side hit + not grounded + essentially no downward progress.
+function handleCornerCatchUnstick(
+  dt: number,
+  body: AABB,
+  st: PhysicsState,
+  solid: SolidTileQuery,
+  world: WorldInfo,
+  state: { catchT: number; cooldownT: number },
+  preY: number
+) {
+  state.cooldownT = Math.max(0, state.cooldownT - dt);
+
+  const falling = body.vy > FALL_UNSTICK_VY;
+  const sideHit = !!(st.hitLeft || st.hitRight);
+  const grounded = !!st.grounded;
+
+  // If we're actually sliding down (y increased), this is normal wall contact: do nothing.
+  const dy = body.y - preY;
+  const noDownProgress = dy <= 0; // snapped integers, so this works well
+
+  if (!grounded && falling && sideHit && noDownProgress && state.cooldownT <= 0) {
+    state.catchT += dt;
+    if (state.catchT >= WALL_CATCH_T) {
+      // Try one nudge, then cooldown.
+      if (tryNudgeAwayFromWall(body, st, solid, world)) {
+        state.cooldownT = WALL_UNSTICK_COOLDOWN_T;
+      }
+      state.catchT = 0;
+    }
+  } else {
+    // reset unless we remain in the exact "caught" condition
+    state.catchT = 0;
+  }
+}
 
 export async function createGooseEntity(opts?: {
   x?: number;
@@ -113,6 +197,9 @@ export async function createGooseEntity(opts?: {
   let puppetJumpLatch = true;
   let groundGrace = 0;
   let puppetSpeed = 0;
+
+  // Unstick state (separate per-entity)
+  const unstick = { catchT: 0, cooldownT: 0 };
 
   const body: AABB = {
     x: opts?.x ?? 24,
@@ -231,31 +318,29 @@ export async function createGooseEntity(opts?: {
       body.vx = Math.max(0, Math.abs(body.vx) - RUN_DECEL * dt) * s;
     }
 
-    // buffered jump (let physics resolve, but velocity is ours)
     if (jumpBuf > 0) {
       jumpBuf = 0;
       body.vy = -JUMP_V;
       log("JUMP!");
     }
 
-    // physics then snap
+    // physics then snap + (rare) corner-unstick
+    const preY = body.y;
     stepTileAabbPhysics(body, physState, dt, solid, world, physTune);
     snapBody(body);
+    handleCornerCatchUnstick(dt, body, physState, solid, world, unstick, preY);
 
     const onGround = groundedStable(dt);
 
-    // Determine movement reality AFTER physics (important for "gap wall" cases)
     const sideHit = !!(physState.hitLeft || physState.hitRight);
     const moving = Math.abs(body.vx) > MOVE_EPS;
 
     if (!onGround) {
       setState("airFlap");
     } else if (!ax || sideHit || !moving) {
-      // If input held but we aren't actually moving (vx killed by collision), go idle.
       setState("groundIdle");
       if (sideHit) body.vx = 0;
     } else {
-      // still optionally keep your "wall detector" to prevent edge/floor weirdness
       const dir = (ax < 0 ? -1 : 1) as -1 | 1;
       if (isPushingWall(body, dir, solid, world)) {
         body.vx = 0;
@@ -298,10 +383,12 @@ export async function createGooseEntity(opts?: {
     }
     if (!masterJump) puppetJumpLatch = false;
 
+    const preY = body.y;
     const preX = body.x;
 
     stepTileAabbPhysics(body, physState, dt, solid, world, physTune);
     snapBody(body);
+    handleCornerCatchUnstick(dt, body, physState, solid, world, unstick, preY);
 
     if (dir !== 0 && DEBUG)
       log(
