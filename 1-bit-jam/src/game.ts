@@ -135,13 +135,21 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     return true;
   }
 
-  function anyEntityOnSpikes(world: TiledWorld, allEntities: Player[]) {
-    for (const e of allEntities) {
-      // IMPORTANT: hazards use FEET collider, not center collider
-      if (aabbOverlapsTileLocalIndex(world, hazardCollider(e), SPIKE_LOCAL_INDEX, ["tile", "collide"])) return true;
+    function anyEntityOnSpikes(world: TiledWorld, allEntities: Player[]) {
+      for (const e of allEntities) {
+        // IMPORTANT: hazards use FEET collider, not center collider
+        const collider = hazardCollider(e);
+        const reduced = {
+          x: collider.x + 2,
+          y: collider.y + 2,
+          w: collider.w - 4,
+          h: collider.h - 4,
+        };
+        if (aabbOverlapsTileLocalIndex(world, reduced, SPIKE_LOCAL_INDEX, ["tile", "collide"])) return true;
+      }
+      return false;
     }
-    return false;
-  }
+
 
   function update(dt: number, keys: Keys) {
     const player = runtime.player;
