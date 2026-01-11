@@ -16,7 +16,7 @@ export type PhysicsState = { grounded: boolean; hitCeil: boolean; hitLeft: boole
 export type WorldInfo = { w: number; h: number; tw: number; th: number; tilesW: number; tilesH: number };
 
 export function defaultPhysicsTuning(): PhysicsTuning {
-  return { grav: 780, fallMax: 220, stepUp: 3, snapDown: 4, maxSubSteps: 4 };
+  return { grav: 780, fallMax: 160, stepUp: 3, snapDown: 4, maxSubSteps: 4 };
 }
 
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);

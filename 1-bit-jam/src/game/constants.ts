@@ -1,6 +1,6 @@
 // src/game/constants.ts
 
-export const DOOR_LOCAL_INDEXES = [64, 65, 79, 80];
+export const DOOR_LOCAL_INDEXES = [71, 72, 86, 87];
 
 // UI trigger tile: tileset-local index (1-based)
 export const UI_TRIGGER_LOCAL_INDEX = 77;

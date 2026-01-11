@@ -173,7 +173,7 @@ export async function createGooseEntity(opts?: {
   const out = snapBakeSize(Math.max(12, ((32 * scale + 0.5) | 0)));
   const baked = await getBakedForSize(out, out);
 
-  const RUN_MAX = 90,
+  const RUN_MAX = 70,
     RUN_ACCEL = 900,
     RUN_DECEL = 1300;
   const JUMP_V = 260,
