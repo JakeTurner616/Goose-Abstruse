@@ -139,7 +139,7 @@ function separationWeights(a: Player, b: Player) {
   return { wa: 0.85, wb: 0.15 };
 }
 
-function separatePair(a: Player, b: Player, i: number, j: number, worldW: number, worldH: number) {
+function separatePair(a: Player, b: Player, i: number, j: number, worldW: number, worldH: number, isSolid: (tx: number, ty: number) => boolean, tw: number, th: number) {
   const A = entityCollider(a);
   const B = entityCollider(b);
 
@@ -154,38 +154,51 @@ function separatePair(a: Player, b: Player, i: number, j: number, worldW: number
   const oy = Math.min(ay2, by2) - Math.max(A.y, B.y);
   if (ox <= 0 || oy <= 0) return false;
 
-  const SLOP = 0.15;
-  let oxs = ox - SLOP;
-
-  const MIN_PUSH = 0.25;
-  if (oxs < MIN_PUSH) oxs = MIN_PUSH;
+  // Use a softer response to prevent "explosions"
+  const RESPONSE_STRENGTH = 0.4; 
+  const SLOP = 0.05;
+  const push = Math.max(0, ox - SLOP) * RESPONSE_STRENGTH;
 
   const acx = A.x + A.w * 0.5;
   const bcx = B.x + B.w * 0.5;
-
   let dx = acx - bcx;
 
-  const EPS = 1e-6;
-  if (Math.abs(dx) < EPS) {
-    const h = pairHash(i, j);
-    dx = h & 1 ? 1 : -1;
+  if (Math.abs(dx) < 1e-6) {
+    dx = pairHash(i, j) & 1 ? 1 : -1;
   }
 
   const { wa, wb } = separationWeights(a, b);
-
   const dir = dx < 0 ? -1 : 1;
-  const push = oxs;
 
-  if (wa) a.x = clamp(a.x + dir * push * wa, 0, worldW - a.w);
-  if (wb) b.x = clamp(b.x - dir * push * wb, 0, worldW - b.w);
+  // PREVENT EJECTION: Check if the push moves them into a wall
+  if (wa > 0) {
+    const nextX = a.x + dir * push * wa;
+    // Simple wall check for the direction of push
+    const testX = dir > 0 ? nextX + a.w : nextX;
+    if (!isSolid((testX / tw) | 0, (a.y / th) | 0) && !isSolid((testX / tw) | 0, ((a.y + a.h - 1) / th) | 0)) {
+      a.x = clamp(nextX, 0, worldW - a.w);
+      // Kill velocity if we are being pushed opposite to our movement
+      if ((dir > 0 && a.vx < 0) || (dir < 0 && a.vx > 0)) a.vx *= 0.2;
+    } else {
+      a.vx = 0; // Pinched against wall
+    }
+  }
 
-  if (wa) a.vx *= 0.6;
-  if (wb) b.vx *= 0.6;
+  if (wb > 0) {
+    const nextX = b.x - dir * push * wb;
+    const testX = dir < 0 ? nextX + b.w : nextX;
+    if (!isSolid((testX / tw) | 0, (b.y / th) | 0) && !isSolid((testX / tw) | 0, ((b.y + b.h - 1) / th) | 0)) {
+      b.x = clamp(nextX, 0, worldW - b.w);
+      if ((dir < 0 && b.vx < 0) || (dir > 0 && b.vx > 0)) b.vx *= 0.2;
+    } else {
+      b.vx = 0; // Pinched against wall
+    }
+  }
 
   return true;
 }
 
-function resolveEntityCollisions(entities: Player[], worldW: number, worldH: number) {
+function resolveEntityCollisions(entities: Player[], worldW: number, worldH: number, isSolid: (tx: number, ty: number) => boolean, tw: number, th: number) {
   const ITERS = 1;
   let anyEver = false;
 
@@ -193,7 +206,7 @@ function resolveEntityCollisions(entities: Player[], worldW: number, worldH: num
     let any = false;
     for (let i = 0; i < entities.length; i++) {
       for (let j = i + 1; j < entities.length; j++) {
-        if (separatePair(entities[i], entities[j], i, j, worldW, worldH)) any = true;
+        if (separatePair(entities[i], entities[j], i, j, worldW, worldH, isSolid, tw, th)) any = true;
       }
     }
 
@@ -602,7 +615,14 @@ function updateCamera() {
       b.puppetStep(dt, intentX, player.vx, masterJump, isSolidTile, worldInfo);
     }
 
-    const collided = resolveEntityCollisions(allEntities, ww, wh);
+    const collided = resolveEntityCollisions(
+  allEntities, 
+  ww, 
+  wh, 
+  isSolidTile, // Pass the function here
+  tw,          // Pass tile width
+  th           // Pass tile height
+);
     if (collided && collisionSfxCooldown === 0) {
       play("bump", { volume: 0.18, detune: -180, minGapMs: 70 });
       collisionSfxCooldown = 0.12;
