@@ -5,6 +5,11 @@ import type { KeyEntity } from "../key";
 const COLLIDER_FRAC = 16 / 64;
 const COLLIDER_MIN = 4;
 
+// For hazards (spikes), use a "feet box" so contact at the ground actually registers.
+const HAZARD_W_FRAC = 0.55;
+const HAZARD_H_FRAC = 0.28;
+const HAZARD_MIN = 4;
+
 export type CAABB = { x: number; y: number; w: number; h: number };
 
 export function entityCollider(p: Player): CAABB {
@@ -12,6 +17,17 @@ export function entityCollider(p: Player): CAABB {
   const ch = Math.max(COLLIDER_MIN, (p.h * COLLIDER_FRAC + 0.5) | 0);
   const cx = p.x + (p.w - cw) * 0.5;
   const cy = p.y + (p.h - ch) * 0.5;
+  return { x: cx, y: cy, w: cw, h: ch };
+}
+
+// Bottom-aligned collider used for spike/hazard checks.
+export function hazardCollider(p: Player): CAABB {
+  const cw = Math.max(HAZARD_MIN, (p.w * HAZARD_W_FRAC + 0.5) | 0);
+  const ch = Math.max(HAZARD_MIN, (p.h * HAZARD_H_FRAC + 0.5) | 0);
+
+  const cx = p.x + (p.w - cw) * 0.5;
+  const cy = p.y + p.h - ch; // feet
+
   return { x: cx, y: cy, w: cw, h: ch };
 }
 

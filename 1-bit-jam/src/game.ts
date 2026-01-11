@@ -16,7 +16,7 @@ import { createUiHudSystem } from "./uiHud";
 import { clamp } from "./game/math";
 import type { Cam } from "./game/types";
 import { scanSpawnPoints, type SpawnPoint } from "./game/spawn";
-import { entityCollider, aabbOverlaps, keyCollider } from "./game/colliders";
+import { entityCollider, hazardCollider, aabbOverlaps, keyCollider } from "./game/colliders";
 import { resolveEntityCollisions } from "./game/entitySeparation";
 import { aabbOverlapsTileLocalIndex } from "./game/tileOverlap";
 import { snapToPixel } from "./game/pixel";
@@ -202,8 +202,10 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
 
   function anyEntityOnSpikes(allEntities: Player[]) {
     if (!world) return false;
+
     for (const e of allEntities) {
-      if (aabbOverlapsTileLocalIndex(world, entityCollider(e), SPIKE_LOCAL_INDEX, ["tile", "collide"])) return true;
+      // IMPORTANT: hazards use FEET collider, not center collider
+      if (aabbOverlapsTileLocalIndex(world, hazardCollider(e), SPIKE_LOCAL_INDEX, ["tile", "collide"])) return true;
     }
     return false;
   }
@@ -405,7 +407,12 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     }
 
     // UI trigger
-    const onTrigger = aabbOverlapsTileLocalIndex(world, entityCollider(player), UI_TRIGGER_LOCAL_INDEX, ["tile", "collide"]);
+    const onTrigger = aabbOverlapsTileLocalIndex(
+      world,
+      entityCollider(player),
+      UI_TRIGGER_LOCAL_INDEX,
+      ["tile", "collide"]
+    );
     if (onTrigger) ui.set("Round up the goslings! <-- / -->");
     else ui.clear();
 

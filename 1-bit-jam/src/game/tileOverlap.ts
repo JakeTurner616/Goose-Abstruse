@@ -7,6 +7,15 @@ export function aabbOverlapsTileLocalIndex(
   localIndex: number,
   layers: string[] = ["tile", "collide"]
 ) {
+  return aabbOverlapsAnyTileLocalIndex(w, aabb, [localIndex], layers);
+}
+
+export function aabbOverlapsAnyTileLocalIndex(
+  w: TiledWorld,
+  aabb: { x: number; y: number; w: number; h: number },
+  localIndexes: number[],
+  layers: string[] = ["tile", "collide"]
+) {
   const { map, ts } = w;
   const tw = map.tw | 0;
   const th = map.th | 0;
@@ -17,6 +26,12 @@ export function aabbOverlapsTileLocalIndex(
   const y1 = ((aabb.y + aabb.h - 1) / th) | 0;
 
   const first = ts.firstgid >>> 0;
+
+  // tiny fast set: local indexes are small ints
+  // (avoid Set alloc in hot path)
+  const L0 = localIndexes[0] | 0;
+  const L1 = (localIndexes.length > 1 ? localIndexes[1] : -1) | 0;
+  const L2 = (localIndexes.length > 2 ? localIndexes[2] : -1) | 0;
 
   for (const layerName of layers) {
     const L = (map as any)[layerName] as Uint32Array | undefined;
@@ -35,7 +50,8 @@ export function aabbOverlapsTileLocalIndex(
 
         // tileset-local index is 1-based
         const li = ((gid - first + 1) | 0);
-        if (li === localIndex) return true;
+
+        if (li === L0 || li === L1 || li === L2) return true;
       }
     }
   }
