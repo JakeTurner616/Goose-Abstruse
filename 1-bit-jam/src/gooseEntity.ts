@@ -12,6 +12,9 @@ const DEBUG = true;
 
 const snapBakeSize = (px: number) => (px >= 30 ? 32 : px >= 22 ? 24 : px >= 14 ? 16 : 12);
 
+// Small threshold so we don't "walk" when vx got killed by collision but input is held.
+const MOVE_EPS = 0.75;
+
 // facing with hysteresis + cooldown (prevents rapid flip noise)
 function makeFacing(initial: 1 | -1 = 1) {
   let f = initial;
@@ -44,7 +47,7 @@ function makeFacing(initial: 1 | -1 = 1) {
 }
 
 function isPushingWall(a: AABB, dir: -1 | 1, solid: SolidTileQuery, world: WorldInfo) {
-  const EPS = 0.5; // Slightly more forgiving epsilon
+  const EPS = 0.5;
 
   if (dir < 0) {
     if (a.x <= EPS) return true;
@@ -52,16 +55,15 @@ function isPushingWall(a: AABB, dir: -1 | 1, solid: SolidTileQuery, world: World
     if (a.x + a.w >= world.w - EPS) return true;
   }
 
-  const tw = world.tw | 0, th = world.th | 0;
-  // Check slightly further out than just 1 pixel to ensure we don't get stuck in floor jitter
-  const px = dir > 0 ? (a.x + a.w + 1) : (a.x - 2); 
+  const tw = world.tw | 0,
+    th = world.th | 0;
+
+  const px = dir > 0 ? a.x + a.w + 1 : a.x - 2;
   if (px < 0 || px >= world.w) return true;
 
   const tx = (px / tw) | 0;
   if (tx < 0 || tx >= world.tilesW) return true;
 
-  // Narrow the vertical "wall detector" so goslings don't think 
-  // the floor or ceiling is a wall they are walking into.
   const yMid = (a.y + a.h * 0.5) | 0;
   const tyMid = (yMid / th) | 0;
 
@@ -69,6 +71,13 @@ function isPushingWall(a: AABB, dir: -1 | 1, solid: SolidTileQuery, world: World
 
   return solid(tx, tyMid);
 }
+
+// Pixel snapping belongs in render, but you're intentionally snapping bodies to integers for 1-bit stability.
+// Round correctly for negative values too.
+const snapBody = (b: AABB) => {
+  b.x = Math.round(b.x);
+  b.y = Math.round(b.y);
+};
 
 export async function createGooseEntity(opts?: {
   x?: number;
@@ -80,8 +89,12 @@ export async function createGooseEntity(opts?: {
   const out = snapBakeSize(Math.max(12, ((32 * scale + 0.5) | 0)));
   const baked = await getBakedForSize(out, out);
 
-  const RUN_MAX = 90, RUN_ACCEL = 900, RUN_DECEL = 1300;
-  const JUMP_V = 260, JUMP_BUF_T = 0.10, GROUND_GRACE_T = 0.05;
+  const RUN_MAX = 90,
+    RUN_ACCEL = 900,
+    RUN_DECEL = 1300;
+  const JUMP_V = 260,
+    JUMP_BUF_T = 0.10,
+    GROUND_GRACE_T = 0.05;
   const BABY_SPEED_MULT = 0.85;
 
   const physTune = defaultPhysicsTuning();
@@ -89,12 +102,14 @@ export async function createGooseEntity(opts?: {
 
   let state: MoveState = "groundIdle";
   let anim: AnimName = "idle";
-  let frame = 0, at = 0;
+  let frame = 0,
+    at = 0;
 
   const animLen: Record<AnimName, number> = { idle: 2, walk: 4, flap: 2 };
   const animRate: Record<AnimName, number> = { idle: 3.5, walk: 10.0, flap: 9.0 };
 
-  let jumpBuf = 0, jumpLatch = false;
+  let jumpBuf = 0,
+    jumpLatch = false;
   let puppetJumpLatch = true;
   let groundGrace = 0;
   let puppetSpeed = 0;
@@ -111,7 +126,6 @@ export async function createGooseEntity(opts?: {
   const controllable = opts?.controllable ?? true;
   const face = makeFacing(1);
 
-  // keep _dbg for collision weighting / dev logs
   const dbg: {
     id: string;
     controllable: boolean;
@@ -189,7 +203,6 @@ export async function createGooseEntity(opts?: {
   const setState = (next: MoveState) => {
     if (state === next) return;
     state = next;
-
     setAnim(state === "airFlap" ? "flap" : state === "groundWalk" ? "walk" : "idle");
     log("STATE->", next);
   };
@@ -218,26 +231,31 @@ export async function createGooseEntity(opts?: {
       body.vx = Math.max(0, Math.abs(body.vx) - RUN_DECEL * dt) * s;
     }
 
+    // buffered jump (let physics resolve, but velocity is ours)
     if (jumpBuf > 0) {
       jumpBuf = 0;
       body.vy = -JUMP_V;
       log("JUMP!");
     }
 
-    const snapBody = (b: AABB) => {
-  b.x = Math.round(b.x);
-  b.y = Math.round(b.y);
-};
-
-// ... inside update() ...
-stepTileAabbPhysics(body, physState, dt, solid, world, physTune);
-snapBody(body); // <--- SNAP IMMEDIATELY AFTER PHYSICS
+    // physics then snap
+    stepTileAabbPhysics(body, physState, dt, solid, world, physTune);
+    snapBody(body);
 
     const onGround = groundedStable(dt);
 
-    if (!onGround) setState("airFlap");
-    else if (!ax) setState("groundIdle");
-    else {
+    // Determine movement reality AFTER physics (important for "gap wall" cases)
+    const sideHit = !!(physState.hitLeft || physState.hitRight);
+    const moving = Math.abs(body.vx) > MOVE_EPS;
+
+    if (!onGround) {
+      setState("airFlap");
+    } else if (!ax || sideHit || !moving) {
+      // If input held but we aren't actually moving (vx killed by collision), go idle.
+      setState("groundIdle");
+      if (sideHit) body.vx = 0;
+    } else {
+      // still optionally keep your "wall detector" to prevent edge/floor weirdness
       const dir = (ax < 0 ? -1 : 1) as -1 | 1;
       if (isPushingWall(body, dir, solid, world)) {
         body.vx = 0;
@@ -254,7 +272,7 @@ snapBody(body); // <--- SNAP IMMEDIATELY AFTER PHYSICS
 
   function puppetStep(
     dt: number,
-    masterDx: number, // The intent from the player
+    masterDx: number,
     _masterDy: number,
     masterJump: boolean,
     solid: SolidTileQuery,
@@ -262,17 +280,15 @@ snapBody(body); // <--- SNAP IMMEDIATELY AFTER PHYSICS
   ) {
     const dir: -1 | 0 | 1 = masterDx < 0 ? -1 : masterDx > 0 ? 1 : 0;
 
-    // 2. LOG THE INPUT
-    if (dir !== 0 && DEBUG) {
-        log("PUPPET_INPUT", `masterDx: ${masterDx} | dir: ${dir}`);
-    }
+    if (dir !== 0 && DEBUG) log("PUPPET_INPUT", `masterDx: ${masterDx} | dir: ${dir}`);
 
     const pushingWall = dir !== 0 && isPushingWall(body, dir as -1 | 1, solid, world);
     const target = dir === 0 ? 0 : RUN_MAX * BABY_SPEED_MULT;
 
     const accel = target > puppetSpeed ? RUN_ACCEL : RUN_DECEL;
     const dv = accel * dt;
-    puppetSpeed = puppetSpeed < target ? Math.min(target, puppetSpeed + dv) : Math.max(target, puppetSpeed - dv);
+    puppetSpeed =
+      puppetSpeed < target ? Math.min(target, puppetSpeed + dv) : Math.max(target, puppetSpeed - dv);
 
     body.vx = dir * puppetSpeed;
 
@@ -282,46 +298,44 @@ snapBody(body); // <--- SNAP IMMEDIATELY AFTER PHYSICS
     }
     if (!masterJump) puppetJumpLatch = false;
 
-    // 3. CAPTURE PRE-PHYSICS POS
     const preX = body.x;
 
     stepTileAabbPhysics(body, physState, dt, solid, world, physTune);
+    snapBody(body);
 
-    // 4. LOG PHYSICS RESULTS
-    if (dir !== 0 && DEBUG) {
-        log("PHYS_RESULT", `vx: ${body.vx.toFixed(2)} | moved: ${(body.x - preX).toFixed(2)} | hitL: ${physState.hitLeft} | hitR: ${physState.hitRight}`);
-    }
+    if (dir !== 0 && DEBUG)
+      log(
+        "PHYS_RESULT",
+        `vx: ${body.vx.toFixed(2)} | moved: ${(body.x - preX).toFixed(2)} | hitL: ${physState.hitLeft} | hitR: ${physState.hitRight}`
+      );
 
     groundGrace = physState.grounded ? GROUND_GRACE_T : Math.max(0, groundGrace - dt);
     const onGround = physState.grounded || groundGrace > 0;
 
     if (physState.hitLeft || physState.hitRight) {
-        puppetSpeed = 0; 
-        body.vx = 0;
+      puppetSpeed = 0;
+      body.vx = 0;
     }
+
+    const sideHit = !!(physState.hitLeft || physState.hitRight);
+    const moving = Math.abs(body.vx) > MOVE_EPS;
 
     face.tick(dt, body.vx, dir);
 
     if (!onGround) setState("airFlap");
-    else if (dir === 0 || pushingWall) setState("groundIdle");
+    else if (dir === 0 || pushingWall || sideHit || !moving) setState("groundIdle");
     else setState("groundWalk");
 
     tickAnim(dt);
-
-
-
     syncDbg();
   }
 
-function draw(ctx: CanvasRenderingContext2D, cam: { x: number; y: number }) {
-    // 1. MUST BE FALSE for 1-bit crispness
+  function draw(ctx: CanvasRenderingContext2D, cam: { x: number; y: number }) {
     ctx.imageSmoothingEnabled = false;
 
     const frames = anim === "walk" ? baked.walk : anim === "flap" ? baked.flap : baked.idle;
     const img = frames[frame % frames.length];
 
-    // 2. Since body.x/y are now integers and cam.x/y are integers (from the previous fix)
-    // the result of this subtraction is a perfect integer.
     const dx = (body.x - cam.x) | 0;
     const dy = (body.y - cam.y) | 0;
 
@@ -334,26 +348,46 @@ function draw(ctx: CanvasRenderingContext2D, cam: { x: number; y: number }) {
       ctx.drawImage(img, 0, 0);
       ctx.restore();
     }
-}
+  }
 
   const api: any = {
-    get x() { return body.x; },
-    set x(v: number) { body.x = v; },
+    get x() {
+      return body.x;
+    },
+    set x(v: number) {
+      body.x = v;
+    },
 
-    get y() { return body.y; },
-    set y(v: number) { body.y = v; },
+    get y() {
+      return body.y;
+    },
+    set y(v: number) {
+      body.y = v;
+    },
 
     w: out,
     h: out,
 
-    get vx() { return body.vx; },
-    set vx(v: number) { body.vx = v; },
+    get vx() {
+      return body.vx;
+    },
+    set vx(v: number) {
+      body.vx = v;
+    },
 
-    get vy() { return body.vy; },
-    set vy(v: number) { body.vy = v; },
+    get vy() {
+      return body.vy;
+    },
+    set vy(v: number) {
+      body.vy = v;
+    },
 
-    get grounded() { return physState.grounded; },
-    set grounded(v: boolean) { physState.grounded = v; },
+    get grounded() {
+      return physState.grounded;
+    },
+    set grounded(v: boolean) {
+      physState.grounded = v;
+    },
 
     update,
     puppetStep,

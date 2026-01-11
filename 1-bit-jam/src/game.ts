@@ -10,57 +10,17 @@ import { loadKeyAtlas, createKeyEntity, type KeyEntity, type KeyAtlas } from "./
 import { createDoorDissolve } from "./doorDissolve";
 
 import type { SoundSystem } from "./sound";
-import { createSoundSystem } from "./sound";
-import { loadSoundBank, type SoundBank } from "./soundBank";
-
 import { createUiMessageSystem } from "./uiMessage";
 import { createUiHudSystem } from "./uiHud";
 
-const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
-
-type Cam = { x: number; y: number };
-
-type SpawnKind = "goose" | "gooseling" | "key";
-type SpawnPoint = { kind: SpawnKind; x: number; y: number };
-
-let keysTotal = 0;
-let keysCollected = 0;
-
-function spawnKindFromGid(gidMasked: number, firstgid: number): SpawnKind | null {
-  if (gidMasked === 1) return "goose";
-  if (gidMasked === 2) return "gooseling";
-
-  if (gidMasked === (firstgid >>> 0)) return "goose"; // index 1
-  if (gidMasked === ((firstgid + 1) >>> 0)) return "gooseling"; // index 2
-
-  if (gidMasked === ((firstgid + 8) >>> 0)) return "key"; // index 9
-  return null;
-}
-
-function scanSpawnPoints(w: TiledWorld): SpawnPoint[] {
-  const out: SpawnPoint[] = [];
-  const { map, ts } = w;
-  const L = (map as any).spawns as Uint32Array;
-
-  for (let i = 0; i < L.length; i++) {
-    const gidRaw = L[i] >>> 0;
-    const gid = (gidRaw & GID_MASK) >>> 0;
-    if (!gid) continue;
-
-    const kind = spawnKindFromGid(gid, ts.firstgid >>> 0);
-    if (!kind) continue;
-
-    const tx = (i % map.w) | 0;
-    const ty = (i / map.w) | 0;
-
-    out.push({
-      kind,
-      x: tx * map.tw,
-      y: ty * map.th,
-    });
-  }
-  return out;
-}
+import { clamp } from "./game/math";
+import type { Cam } from "./game/types";
+import { scanSpawnPoints, type SpawnPoint } from "./game/spawn";
+import { entityCollider, aabbOverlaps, keyCollider } from "./game/colliders";
+import { resolveEntityCollisions } from "./game/entitySeparation";
+import { aabbOverlapsTileLocalIndex } from "./game/tileOverlap";
+import { snapToPixel } from "./game/pixel";
+import { createAudioRig } from "./game/audioRig";
 
 export type Game = {
   cam: Cam;
@@ -70,11 +30,8 @@ export type Game = {
   mountainBG: ReturnType<typeof createMountainBG>;
   userGesture(): void;
 
-  /** Explicitly load a level by index (0..levels-1). Out-of-range clamps. */
   loadLevel(i: number): void;
-  /** Convenience: load next level (wraps to 0). */
   nextLevel(): void;
-  /** Useful for UI/debug */
   getLevelIndex(): number;
   getLevelCount(): number;
 
@@ -83,143 +40,10 @@ export type Game = {
 };
 
 export type CreateGameOpts = {
-  sound?: SoundSystem; // injected shared sound system (from main)
-  /** Optional level list; defaults to a single sample map. */
+  sound?: SoundSystem;
   levels?: string[];
-  /** Optional starting level index; defaults to 0. */
   startLevel?: number;
 };
-
-// --- entity collision (revised weighting + stability)
-
-const COLLIDER_FRAC = 16 / 64;
-const COLLIDER_MIN = 4;
-
-type CAABB = { x: number; y: number; w: number; h: number };
-
-function entityCollider(p: Player): CAABB {
-  const cw = Math.max(COLLIDER_MIN, (p.w * COLLIDER_FRAC + 0.5) | 0);
-  const ch = Math.max(COLLIDER_MIN, (p.h * COLLIDER_FRAC + 0.5) | 0);
-  const cx = p.x + (p.w - cw) * 0.5;
-  const cy = p.y + (p.h - ch) * 0.5;
-  return { x: cx, y: cy, w: cw, h: ch };
-}
-
-function aabbOverlaps(a: CAABB, b: CAABB) {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-}
-
-// KeyEntity is anchored at bottom-center; its nominal untrimmed (w,h) come from atlas sourceSize.
-function keyCollider(k: KeyEntity): CAABB {
-  const s = k.scale || 1;
-  const w = k.w * s;
-  const h = k.h * s;
-  return { x: k.x - w * 0.5, y: k.y - h, w, h };
-}
-
-// small stable hash for pair tie-breaks
-function pairHash(i: number, j: number) {
-  const a = i < j ? i : j;
-  const b = i < j ? j : i;
-  let h = (a * 73856093) ^ (b * 19349663);
-  h = (h ^ (h >>> 16)) >>> 0;
-  return h;
-}
-
-function isControllable(p: Player): boolean {
-  return !!(p as any)?._dbg?.controllable;
-}
-
-function separationWeights(a: Player, b: Player) {
-  const ca = isControllable(a);
-  const cb = isControllable(b);
-
-  if (ca === cb) return { wa: 0.5, wb: 0.5 };
-  if (ca && !cb) return { wa: 0.15, wb: 0.85 };
-  return { wa: 0.85, wb: 0.15 };
-}
-
-function separatePair(a: Player, b: Player, i: number, j: number, worldW: number, worldH: number, isSolid: (tx: number, ty: number) => boolean, tw: number, th: number) {
-  const A = entityCollider(a);
-  const B = entityCollider(b);
-
-  const ax2 = A.x + A.w;
-  const ay2 = A.y + A.h;
-  const bx2 = B.x + B.w;
-  const by2 = B.y + B.h;
-
-  if (ax2 <= B.x || bx2 <= A.x || ay2 <= B.y || by2 <= A.y) return false;
-
-  const ox = Math.min(ax2, bx2) - Math.max(A.x, B.x);
-  const oy = Math.min(ay2, by2) - Math.max(A.y, B.y);
-  if (ox <= 0 || oy <= 0) return false;
-
-  // Use a softer response to prevent "explosions"
-  const RESPONSE_STRENGTH = 0.4; 
-  const SLOP = 0.05;
-  const push = Math.max(0, ox - SLOP) * RESPONSE_STRENGTH;
-
-  const acx = A.x + A.w * 0.5;
-  const bcx = B.x + B.w * 0.5;
-  let dx = acx - bcx;
-
-  if (Math.abs(dx) < 1e-6) {
-    dx = pairHash(i, j) & 1 ? 1 : -1;
-  }
-
-  const { wa, wb } = separationWeights(a, b);
-  const dir = dx < 0 ? -1 : 1;
-
-  // PREVENT EJECTION: Check if the push moves them into a wall
-  if (wa > 0) {
-    const nextX = a.x + dir * push * wa;
-    // Simple wall check for the direction of push
-    const testX = dir > 0 ? nextX + a.w : nextX;
-    if (!isSolid((testX / tw) | 0, (a.y / th) | 0) && !isSolid((testX / tw) | 0, ((a.y + a.h - 1) / th) | 0)) {
-      a.x = clamp(nextX, 0, worldW - a.w);
-      // Kill velocity if we are being pushed opposite to our movement
-      if ((dir > 0 && a.vx < 0) || (dir < 0 && a.vx > 0)) a.vx *= 0.2;
-    } else {
-      a.vx = 0; // Pinched against wall
-    }
-  }
-
-  if (wb > 0) {
-    const nextX = b.x - dir * push * wb;
-    const testX = dir < 0 ? nextX + b.w : nextX;
-    if (!isSolid((testX / tw) | 0, (b.y / th) | 0) && !isSolid((testX / tw) | 0, ((b.y + b.h - 1) / th) | 0)) {
-      b.x = clamp(nextX, 0, worldW - b.w);
-      if ((dir < 0 && b.vx < 0) || (dir > 0 && b.vx > 0)) b.vx *= 0.2;
-    } else {
-      b.vx = 0; // Pinched against wall
-    }
-  }
-
-  return true;
-}
-
-function resolveEntityCollisions(entities: Player[], worldW: number, worldH: number, isSolid: (tx: number, ty: number) => boolean, tw: number, th: number) {
-  const ITERS = 1;
-  let anyEver = false;
-
-  for (let it = 0; it < ITERS; it++) {
-    let any = false;
-    for (let i = 0; i < entities.length; i++) {
-      for (let j = i + 1; j < entities.length; j++) {
-        if (separatePair(entities[i], entities[j], i, j, worldW, worldH, isSolid, tw, th)) any = true;
-      }
-    }
-
-    if (!any) break;
-  }
-
-  return anyEver;
-}
-
-function snapToPixel(p: Player) {
-  p.x = (p.x + 0.5) | 0;
-  p.y = (p.y + 0.5) | 0;
-}
 
 const DOOR_LOCAL_INDEXES = [64, 65, 79, 80];
 
@@ -227,64 +51,16 @@ const DOOR_LOCAL_INDEXES = [64, 65, 79, 80];
 const UI_TRIGGER_LOCAL_INDEX = 77;
 
 // Finish tile: tileset-local index (1-based)
-// Put your “finish line” tile on the *tile* layer (or collide layer if you want).
 const FINISH_LOCAL_INDEX = 77;
+
+// Spikes tile: tileset-local index (1-based)
+const SPIKE_LOCAL_INDEX = 76;
 
 // Win sequence timing
 const WIN_HOLD_SEC = 1.2;
 
-// IMPORTANT: keep this consistent with your filesystem: public/Sounds/*.json
-const SFX_PATHS: Record<string, string> = {
-  uiClick: "/Sounds/uiClick.json",
-  uiConfirm: "/Sounds/uiConfirm.json",
-  invert: "/Sounds/invert.json",
-  jump: "/Sounds/jump.json",
-  bump: "/Sounds/bump.json",
-  keyPickup: "/Sounds/keyPickup.json",
-  doorOpen: "/Sounds/doorOpen.json",
-};
-
-function aabbOverlapsTileLocalIndex(
-  w: TiledWorld,
-  aabb: { x: number; y: number; w: number; h: number },
-  localIndex: number,
-  layers: string[] = ["tile", "collide"]
-) {
-  const { map, ts } = w;
-  const tw = map.tw | 0;
-  const th = map.th | 0;
-
-  const x0 = (aabb.x / tw) | 0;
-  const y0 = (aabb.y / th) | 0;
-  const x1 = (((aabb.x + aabb.w - 1) / tw) | 0);
-  const y1 = (((aabb.y + aabb.h - 1) / th) | 0);
-
-  const first = ts.firstgid >>> 0;
-
-  for (const layerName of layers) {
-    const L = (map as any)[layerName] as Uint32Array | undefined;
-    if (!L) continue;
-
-    for (let ty = y0; ty <= y1; ty++) {
-      if (ty < 0 || ty >= map.h) continue;
-      const row = ty * map.w;
-
-      for (let tx = x0; tx <= x1; tx++) {
-        if (tx < 0 || tx >= map.w) continue;
-
-        const gidRaw = L[row + tx] >>> 0;
-        const gid = (gidRaw & GID_MASK) >>> 0;
-        if (!gid) continue;
-
-        // tileset-local index is 1-based
-        const li = ((gid - first + 1) | 0);
-        if (li === localIndex) return true;
-      }
-    }
-  }
-
-  return false;
-}
+// Death/respawn timing
+const DEATH_HOLD_SEC = 0.65;
 
 export async function createGame(vw: number, vh: number, opts?: CreateGameOpts): Promise<Game> {
   const cam: Cam = { x: 0, y: 0 };
@@ -292,69 +68,45 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
 
   const mountainBG = createMountainBG(vw, vh);
 
-  // ---- sound: USE injected shared sound system (from main) if provided
-  const sfx: SoundSystem = opts?.sound ?? createSoundSystem({ volume: 0.15 });
-  let bank: SoundBank | null = null;
+  // sound
+  const { sfx, play } = createAudioRig(opts?.sound);
 
-  loadSoundBank(sfx, SFX_PATHS)
-    .then((b) => {
-      bank = b;
-    })
-    .catch(() => {
-      bank = null;
-    });
-
-  function fallbackPlay(name: string, opts2?: { volume?: number; detune?: number; minGapMs?: number }) {
-    if (name === "jump") sfx.playPreset("jump", opts2);
-    else if (name === "keyPickup") sfx.playPreset("pickupCoin", opts2);
-    else if (name === "doorOpen") sfx.playPreset("powerUp", opts2);
-    else if (name === "bump") sfx.playPreset("hitHurt", opts2);
-    else if (name === "invert") sfx.playPreset("blipSelect", opts2);
-    else if (name === "uiConfirm") sfx.playPreset("powerUp", opts2);
-    else sfx.playPreset("click", opts2);
-  }
-
-  function play(name: string, opts2?: { volume?: number; detune?: number; minGapMs?: number }) {
-    if (!bank) {
-      fallbackPlay(name, opts2);
-      return;
-    }
-    try {
-      bank.play(name, opts2);
-    } catch {
-      fallbackPlay(name, opts2);
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Level system
-  // ---------------------------------------------------------------------------
-  const LEVELS = (opts?.levels?.length
-  ? opts.levels
-  : ["/Tiled/level1.tmx", "/Tiled/level1 copy.tmx"]).slice();
+  // levels
+  const LEVELS = (opts?.levels?.length ? opts.levels : ["/Tiled/level1.tmx", "/Tiled/level1 copy.tmx"]).slice();
   let levelIndex = clamp(opts?.startLevel ?? 0, 0, Math.max(0, LEVELS.length - 1)) | 0;
 
   let loadingLevel = false;
   let pendingLoad: Promise<void> | null = null;
 
-  // Win gate state
+  // win state
   let winActive = false;
   let winT = 0;
   let winPlayed = false;
 
+  // death state
+  let deadActive = false;
+  let deadT = 0;
+  let deadPlayed = false;
+
+  // world + entities
   let world: TiledWorld | null = null;
   let player: Player;
   const gooselings: Player[] = [];
 
+  // key
   let keyAtlas: KeyAtlas | null = null;
   let key: KeyEntity | null = null;
 
+  // misc
   const doorFx = createDoorDissolve();
   const ui = createUiMessageSystem();
-  const hud = createUiHudSystem(); // FIX: create once, update in update()
-
+  const hud = createUiHudSystem();
   let t = 0;
   let collisionSfxCooldown = 0;
+
+  // per-level counters (NOT globals)
+  let keysTotal = 0;
+  let keysCollected = 0;
 
   function isSolidTile(tx: number, ty: number) {
     if (!world) return false;
@@ -364,14 +116,13 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     return (gidRaw & GID_MASK) !== 0;
   }
 
-function updateCamera() {
+  function updateCamera() {
     if (!player) return;
     const ww = world ? world.map.w * world.map.tw : vw;
     const wh = world ? world.map.h * world.map.th : vh;
 
-    // Use Math.floor to ensure negative coordinates don't flip rounding direction
-    let targetX = (player.x + (player.w >> 1)) - (vw >> 1);
-    let targetY = (player.y + (player.h >> 1)) - (vh >> 1);
+    const targetX = player.x + (player.w >> 1) - (vw >> 1);
+    const targetY = player.y + (player.h >> 1) - (vh >> 1);
 
     cam.x = Math.floor(clamp(targetX, 0, Math.max(0, ww - vw)));
     cam.y = Math.floor(clamp(targetY, 0, Math.max(0, wh - vh)));
@@ -403,41 +154,63 @@ function updateCamera() {
     winPlayed = false;
   }
 
-  function beginWinSequence() {
-    if (winActive) return;
-    winActive = true;
-    winT = 0;
-    winPlayed = false;
+  function resetDeathState() {
+    deadActive = false;
+    deadT = 0;
+    deadPlayed = false;
+  }
 
-    // snap everyone for clean finish, kill motion
+  function freezeAll() {
     const all = [player, ...gooselings];
     for (const e of all) {
       e.vx = 0;
       e.vy = 0;
       snapToPixel(e);
     }
+  }
 
+  function beginWinSequence() {
+    if (winActive) return;
+    winActive = true;
+    winT = 0;
+    winPlayed = false;
+    freezeAll();
     ui.set("LEVEL COMPLETE!");
+  }
+
+  function beginDeathSequence() {
+    if (deadActive || loadingLevel) return;
+    deadActive = true;
+    deadT = 0;
+    deadPlayed = false;
+    freezeAll();
+    ui.set("OUCH!");
   }
 
   function isEntityOnFinish(p: Player) {
     if (!world) return false;
-    // finish tile is expected on tile layer (and/or collide if you want)
     return aabbOverlapsTileLocalIndex(world, entityCollider(p), FINISH_LOCAL_INDEX, ["tile"]);
   }
 
   function allEntitiesOnFinish() {
     if (!world) return false;
-    if (!gooselings.length) return false; // game goal implies there are goslings to round up
+    if (!gooselings.length) return false;
     if (!isEntityOnFinish(player)) return false;
     for (const b of gooselings) if (!isEntityOnFinish(b)) return false;
     return true;
   }
 
+  function anyEntityOnSpikes(allEntities: Player[]) {
+    if (!world) return false;
+    for (const e of allEntities) {
+      if (aabbOverlapsTileLocalIndex(world, entityCollider(e), SPIKE_LOCAL_INDEX, ["tile", "collide"])) return true;
+    }
+    return false;
+  }
+
   async function applyLoadedWorld(nextWorld: TiledWorld) {
     world = nextWorld;
 
-    // scan spawns
     const sp = scanSpawnPoints(world);
     keysTotal = sp.filter((s) => s.kind === "key").length | 0;
     keysCollected = 0;
@@ -450,6 +223,7 @@ function updateCamera() {
       startX = goose.x;
       startY = goose.y;
     }
+
     player.x = startX;
     player.y = startY;
     player.vx = 0;
@@ -459,28 +233,21 @@ function updateCamera() {
     // babies
     await spawnGooselings(sp);
 
-    // key entity
+    // key entity (first key spawn)
     key = null;
     if (keyAtlas) {
       const kp = sp.find((s) => s.kind === "key");
       if (kp) {
         const tw = world.map.tw;
         const th = world.map.th;
-
-        key = createKeyEntity(keyAtlas, {
-          x: kp.x + (tw >> 1),
-          y: kp.y + th,
-          scale: 1,
-          fps: 14,
-        });
+        key = createKeyEntity(keyAtlas, { x: kp.x + (tw >> 1), y: kp.y + th, scale: 1, fps: 14 });
       }
     }
 
-    // clear fx + UI
-    doorFx.reset?.(); // if doorDissolve exposes reset; safe if undefined
+    doorFx.reset?.();
     ui.clear();
     resetWinState();
-
+    resetDeathState();
     updateCamera();
   }
 
@@ -490,12 +257,12 @@ function updateCamera() {
     const idx = clamp(i | 0, 0, LEVELS.length - 1) | 0;
     levelIndex = idx;
 
-    // If a load is already running, just let it finish; next request overrides index and triggers again.
     if (loadingLevel) return;
 
     loadingLevel = true;
     ui.set("LOADING...");
     resetWinState();
+    resetDeathState();
 
     const url = LEVELS[levelIndex];
 
@@ -512,8 +279,7 @@ function updateCamera() {
 
   function nextLevel() {
     if (!LEVELS.length) return;
-    const ni = ((levelIndex + 1) % LEVELS.length) | 0;
-    loadLevel(ni);
+    loadLevel(((levelIndex + 1) % LEVELS.length) | 0);
   }
 
   // ---------------------------------------------------------------------------
@@ -527,8 +293,16 @@ function updateCamera() {
 
   player = p;
   keyAtlas = ka;
-
   await applyLoadedWorld(firstWorld);
+
+  function updateHud(dt: number) {
+    hud.setCounts({
+      goslings: gooselings.length | 0,
+      keysCur: keysCollected | 0,
+      keysTotal: keysTotal | 0,
+    });
+    hud.update(dt);
+  }
 
   function update(dt: number, keys: Keys) {
     if (!player) return;
@@ -540,21 +314,35 @@ function updateCamera() {
 
     if (dt > 0) t += Math.min(dt, 0.05);
 
-    // keep HUD/UI ticking during loads/win (stable)
     ui.update(dt);
 
-    // If a level is loading, keep things quiet/stable and show HUD.
+    // Loading: keep HUD/UI stable
     if (loadingLevel || !world) {
-      hud.setCounts({
-        goslings: gooselings.length | 0,
-        keysCur: keysCollected | 0,
-        keysTotal: keysTotal | 0,
-      });
-      hud.update(dt);
+      updateHud(dt);
       return;
     }
 
-    // Win sequence: freeze gameplay, play a short “win” hold, then advance.
+    // Death: freeze, then reload current
+    if (deadActive) {
+      deadT += dt;
+
+      if (!deadPlayed) {
+        deadPlayed = true;
+        play("death", { volume: 0.7, minGapMs: 180 });
+      }
+
+      if (key) key.update(dt);
+      updateHud(dt);
+      updateCamera();
+
+      if (deadT >= DEATH_HOLD_SEC) {
+        ui.clear();
+        loadLevel(levelIndex);
+      }
+      return;
+    }
+
+    // Win: freeze, then advance
     if (winActive) {
       winT += dt;
 
@@ -563,17 +351,8 @@ function updateCamera() {
         play("uiConfirm", { volume: 0.65, minGapMs: 120 });
       }
 
-      // keep key anim alive if present (nice polish)
       if (key) key.update(dt);
-
-      // keep HUD alive
-      hud.setCounts({
-        goslings: gooselings.length | 0,
-        keysCur: keysCollected | 0,
-        keysTotal: keysTotal | 0,
-      });
-      hud.update(dt);
-
+      updateHud(dt);
       updateCamera();
 
       if (winT >= WIN_HOLD_SEC) {
@@ -585,7 +364,6 @@ function updateCamera() {
 
     // normal update path
     if (key) key.update(dt);
-
     if (collisionSfxCooldown > 0) collisionSfxCooldown = Math.max(0, collisionSfxCooldown - dt);
 
     const allEntities: Player[] = [player, ...gooselings];
@@ -611,37 +389,29 @@ function updateCamera() {
 
     if (masterJump) play("jump", { volume: 0.55, minGapMs: 40 });
 
-    for (const b of gooselings) {
-      b.puppetStep(dt, intentX, player.vx, masterJump, isSolidTile, worldInfo);
-    }
+    for (const b of gooselings) b.puppetStep(dt, intentX, player.vx, masterJump, isSolidTile, worldInfo);
 
-    const collided = resolveEntityCollisions(
-  allEntities, 
-  ww, 
-  wh, 
-  isSolidTile, // Pass the function here
-  tw,          // Pass tile width
-  th           // Pass tile height
-);
+    const collided = resolveEntityCollisions(allEntities, ww, wh, isSolidTile, tw, th);
     if (collided && collisionSfxCooldown === 0) {
       play("bump", { volume: 0.18, detune: -180, minGapMs: 70 });
       collisionSfxCooldown = 0.12;
     }
 
-    // --- UI trigger: show banner while player overlaps local index 77 tiles
+    // spikes death
+    if (anyEntityOnSpikes(allEntities)) {
+      beginDeathSequence();
+      updateCamera();
+      return;
+    }
+
+    // UI trigger
     const onTrigger = aabbOverlapsTileLocalIndex(world, entityCollider(player), UI_TRIGGER_LOCAL_INDEX, ["tile", "collide"]);
     if (onTrigger) ui.set("Round up the goslings! <-- / -->");
     else ui.clear();
 
-    // --- HUD: update in update() (prevents draw-phase state churn + keeps timing stable)
-    hud.setCounts({
-      goslings: gooselings.length | 0,
-      keysCur: keysCollected | 0,
-      keysTotal: keysTotal | 0,
-    });
-    hud.update(dt);
+    updateHud(dt);
 
-    // key pickup triggers door dissolve
+    // key pickup
     if (key) {
       const kA = keyCollider(key);
       let picked = false;
@@ -658,7 +428,7 @@ function updateCamera() {
         keysCollected = (keysCollected + 1) | 0;
 
         play("keyPickup", { volume: 0.65, minGapMs: 90 });
-        play("doorOpen", { volume: 0.40, detune: +120, minGapMs: 120 });
+        play("doorOpen", { volume: 0.4, detune: +120, minGapMs: 120 });
 
         doorFx.begin(world, t, {
           localIndexes: DOOR_LOCAL_INDEXES,
@@ -671,13 +441,9 @@ function updateCamera() {
 
     doorFx.step(world, dt);
 
-    // -----------------------------------------------------------------------
-    // WIN CONDITION:
-    // Player goose + ALL goslings must overlap the finish-line tile
-    // -----------------------------------------------------------------------
+    // win condition
     if (allEntitiesOnFinish()) {
       beginWinSequence();
-      // early out so camera/UI reflects win immediately
       updateCamera();
       return;
     }
@@ -685,13 +451,12 @@ function updateCamera() {
     updateCamera();
   }
 
- function drawMap(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
+  function drawMap(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
     if (!world) return;
     const { map, ts } = world;
     const tw = map.tw;
     const th = map.th;
 
-    // Use floored camera values for index calculation
     const cx = Math.floor(cam.x);
     const cy = Math.floor(cam.y);
 
@@ -700,7 +465,6 @@ function updateCamera() {
     const x1 = clamp(((cx + vw + tw) / tw) | 0, 0, map.w);
     const y1 = clamp(((cy + vh + th) / th) | 0, 0, map.h);
 
-    // This 'ox' and 'oy' must be integers to keep tiles on the grid
     const ox = (cx - x0 * tw) | 0;
     const oy = (cy - y0 * th) | 0;
 
@@ -709,11 +473,13 @@ function updateCamera() {
 
     for (let ty = y0; ty < y1; ty++) {
       const row = ty * map.w;
-      const dy = ((ty - y0) * th - oy) | 0; // Integer
+      const dy = ((ty - y0) * th - oy) | 0;
       for (let tx = x0; tx < x1; tx++) {
-        const dx = ((tx - x0) * tw - ox) | 0; // Integer
+        const dx = ((tx - x0) * tw - ox) | 0;
+
         const gidA = tileLayer[row + tx] >>> 0;
         if ((gidA & GID_MASK) !== 0) drawTile(offCtx, ts, gidA, dx, dy);
+
         const gidB = collideLayer[row + tx] >>> 0;
         if ((gidB & GID_MASK) !== 0) drawTile(offCtx, ts, gidB, dx, dy);
       }
@@ -721,10 +487,7 @@ function updateCamera() {
   }
 
   function drawHud(offCtx: CanvasRenderingContext2D) {
-    // New HUD (pixel-stable)
     hud.draw(offCtx, vw, vh, invert);
-
-    // Optional debug text underneath
     offCtx.fillStyle = invert ? "#000" : "#fff";
     offCtx.font = "10px monospace";
   }
@@ -748,7 +511,6 @@ function updateCamera() {
 
     if (key) key.draw(offCtx, cam);
 
-    // win “celebration” render-only bob (no physics changes)
     const bob = winActive ? (((Math.sin(winT * 10) * 2) | 0) as number) : 0;
 
     if (bob) {
@@ -762,9 +524,7 @@ function updateCamera() {
       player.draw(offCtx, cam);
     }
 
-    // UI banner
     ui.draw(offCtx, vw, vh, invert);
-
     drawHud(offCtx);
   }
 
@@ -775,7 +535,7 @@ function updateCamera() {
     },
     toggleInvert() {
       invert = !invert;
-      play("invert", { volume: 0.20, detune: invert ? +160 : -160, minGapMs: 60 });
+      play("invert", { volume: 0.2, detune: invert ? +160 : -160, minGapMs: 60 });
     },
     mountainBG,
     userGesture() {
