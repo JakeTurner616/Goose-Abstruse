@@ -62,6 +62,9 @@ const WIN_HOLD_SEC = 1.2;
 // Death/respawn timing
 const DEATH_HOLD_SEC = 0.65;
 
+// Camera pan timing for "next goose" focus
+const CAM_PAN_SEC = 0.35;
+
 export async function createGame(vw: number, vh: number, opts?: CreateGameOpts): Promise<Game> {
   const cam: Cam = { x: 0, y: 0 };
   let invert = false;
@@ -108,24 +111,118 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
   let keysTotal = 0;
   let keysCollected = 0;
 
+  // ---------------------------------------------------------------------------
+  // Camera focus + smooth pan-to-next-goose (press X / keys.b)
+  // ---------------------------------------------------------------------------
+  let camFocus = 0; // 0=player, 1..N=gooselings
+  let camSwitchLatch = false;
+
+  const camPan = {
+    active: false,
+    t: 0,
+    dur: CAM_PAN_SEC,
+    sx: 0,
+    sy: 0,
+    tx: 0,
+    ty: 0,
+    nextFocus: 0,
+  };
+
+  const smoothstep01 = (u: number) => u * u * (3 - 2 * u);
+
+  function focusCount() {
+    return 1 + gooselings.length;
+  }
+
+  function focusEntity(idx: number): Player {
+    return idx <= 0 ? player : gooselings[(idx - 1) % Math.max(1, gooselings.length)];
+  }
+
+  function clampCamToWorld(x: number, y: number) {
+    const ww = world ? world.map.w * world.map.tw : vw;
+    const wh = world ? world.map.h * world.map.th : vh;
+    return {
+      x: clamp(x, 0, Math.max(0, ww - vw)),
+      y: clamp(y, 0, Math.max(0, wh - vh)),
+    };
+  }
+
+  function camTargetFor(p: Player) {
+    const targetX = p.x + (p.w >> 1) - (vw >> 1);
+    const targetY = p.y + (p.h >> 1) - (vh >> 1);
+    return clampCamToWorld(targetX, targetY);
+  }
+
+  function beginCamPanTo(nextFocus: number) {
+    camPan.active = true;
+    camPan.t = 0;
+    camPan.dur = CAM_PAN_SEC;
+    camPan.sx = cam.x;
+    camPan.sy = cam.y;
+
+    const e = focusEntity(nextFocus);
+    const tgt = camTargetFor(e);
+    camPan.tx = tgt.x;
+    camPan.ty = tgt.y;
+    camPan.nextFocus = nextFocus;
+  }
+
+  function updateCamera(dt: number) {
+    if (!player) return;
+
+    if (camPan.active) {
+      camPan.t += dt;
+      const u = camPan.dur > 0 ? Math.min(1, camPan.t / camPan.dur) : 1;
+      const s = smoothstep01(u);
+
+      const nx = camPan.sx + (camPan.tx - camPan.sx) * s;
+      const ny = camPan.sy + (camPan.ty - camPan.sy) * s;
+
+      cam.x = nx;
+      cam.y = ny;
+
+      if (u >= 1) {
+        camPan.active = false;
+        camFocus = camPan.nextFocus | 0;
+
+        // snap final cam to an integer pixel for 1-bit stability
+        cam.x = Math.floor(cam.x);
+        cam.y = Math.floor(cam.y);
+      }
+      return;
+    }
+
+    const e = focusEntity(camFocus);
+    const tgt = camTargetFor(e);
+
+    // default camera remains pixel-snapped (no blur), only the X-pan is smooth.
+    cam.x = Math.floor(tgt.x);
+    cam.y = Math.floor(tgt.y);
+  }
+
+  function handleCamSwitchInput(keys: Keys) {
+    // X is bound to keys.b in input.ts
+    if (keys.b && !camSwitchLatch) {
+      camSwitchLatch = true;
+
+      const n = focusCount();
+      if (n > 1) {
+        const next = ((camFocus + 1) % n) | 0;
+        beginCamPanTo(next);
+      } else {
+        // no babies: just do a tiny "confirm" sfx so the button isn't dead
+        play("uiClick", { volume: 0.25, minGapMs: 80 });
+      }
+    }
+    if (!keys.b) camSwitchLatch = false;
+  }
+
   function isSolidTile(tx: number, ty: number) {
     if (!world) return false;
     const { map } = world;
     if (tx < 0 || ty < 0 || tx >= map.w || ty >= map.h) return true;
     const gidRaw = (map as any).collide[ty * map.w + tx] >>> 0;
     return (gidRaw & GID_MASK) !== 0;
-  }
-
-  function updateCamera() {
-    if (!player) return;
-    const ww = world ? world.map.w * world.map.tw : vw;
-    const wh = world ? world.map.h * world.map.th : vh;
-
-    const targetX = player.x + (player.w >> 1) - (vw >> 1);
-    const targetY = player.y + (player.h >> 1) - (vh >> 1);
-
-    cam.x = Math.floor(clamp(targetX, 0, Math.max(0, ww - vw)));
-    cam.y = Math.floor(clamp(targetY, 0, Math.max(0, wh - vh)));
   }
 
   async function spawnGooselings(points: SpawnPoint[]) {
@@ -146,6 +243,10 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
 
     gooselings.push(...made);
     for (const b of gooselings) snapToPixel(b);
+
+    // keep focus index valid when babies count changes
+    const n = focusCount();
+    camFocus = clamp(camFocus, 0, Math.max(0, n - 1)) | 0;
   }
 
   function resetWinState() {
@@ -250,7 +351,13 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     ui.clear();
     resetWinState();
     resetDeathState();
-    updateCamera();
+
+    // reset camera focus + any in-flight pan
+    camFocus = 0;
+    camPan.active = false;
+    camSwitchLatch = false;
+
+    updateCamera(0);
   }
 
   function loadLevel(i: number) {
@@ -265,6 +372,9 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     ui.set("LOADING...");
     resetWinState();
     resetDeathState();
+
+    // prevent carrying a pan into the next map
+    camPan.active = false;
 
     const url = LEVELS[levelIndex];
 
@@ -318,6 +428,9 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
 
     ui.update(dt);
 
+    // X-to-next-goose is allowed during normal gameplay + win/death holds
+    handleCamSwitchInput(keys);
+
     // Loading: keep HUD/UI stable
     if (loadingLevel || !world) {
       updateHud(dt);
@@ -335,7 +448,7 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
 
       if (key) key.update(dt);
       updateHud(dt);
-      updateCamera();
+      updateCamera(dt);
 
       if (deadT >= DEATH_HOLD_SEC) {
         ui.clear();
@@ -355,7 +468,7 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
 
       if (key) key.update(dt);
       updateHud(dt);
-      updateCamera();
+      updateCamera(dt);
 
       if (winT >= WIN_HOLD_SEC) {
         ui.clear();
@@ -402,7 +515,7 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     // spikes death
     if (anyEntityOnSpikes(allEntities)) {
       beginDeathSequence();
-      updateCamera();
+      updateCamera(dt);
       return;
     }
 
@@ -451,11 +564,11 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     // win condition
     if (allEntitiesOnFinish()) {
       beginWinSequence();
-      updateCamera();
+      updateCamera(dt);
       return;
     }
 
-    updateCamera();
+    updateCamera(dt);
   }
 
   function drawMap(offCtx: CanvasRenderingContext2D, vw: number, vh: number) {
@@ -464,6 +577,7 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     const tw = map.tw;
     const th = map.th;
 
+    // draw from integer camera to keep tiles 1-bit crisp
     const cx = Math.floor(cam.x);
     const cy = Math.floor(cam.y);
 
