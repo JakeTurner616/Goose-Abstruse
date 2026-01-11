@@ -7,5 +7,5 @@ import { createGooseEntity } from "./gooseEntity";
 import type { Player } from "./playerTypes";
 
 export function createPlayer(opts?: { x?: number; y?: number }): Promise<Player> {
-  return createGooseEntity({ x: opts?.x, y: opts?.y, scale: 1, controllable: true });
+  return createGooseEntity({ x: opts?.x, y: opts?.y, scale: 0.85, controllable: true });
 }

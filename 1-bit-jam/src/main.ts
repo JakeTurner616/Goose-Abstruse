@@ -13,7 +13,7 @@ import { createOggMusic } from "./musicOgg";
 const VIRTUAL_W = 160;
 const VIRTUAL_H = 144;
 
-// Global master volume (this now DEFINITELY affects in-game SFX)
+// Global master volume
 const MASTER_VOLUME = 0.05;
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
@@ -40,19 +40,16 @@ resize();
 
 const keys = createKeys();
 
-// Single shared sound system for the whole app (menu + game)
 const sound = createSoundSystem({
   volume: MASTER_VOLUME,
   muted: false,
 });
 
-// Simple OGG music system (separate from SFX; tiny + reliable)
 const music = createOggMusic({
-  volume: Math.min(1, MASTER_VOLUME * 12), // music usually wants more than SFX
+  volume: Math.min(1, MASTER_VOLUME * 12),
   muted: false,
 });
 
-// ---- Audio gating: must be triggered from a real user input event
 let audioUnlocked = false;
 let wantMusic = false;
 let musicReady = false;
@@ -73,43 +70,37 @@ function tryStartMusic() {
   music.play({ loop: true, restart: true });
 }
 
-// Fire-and-forget: begin loading early (doesn't autoplay)
 music
   .load("/Music/tix0.ogg")
   .then(() => {
     musicReady = true;
-    tryStartMusic(); // in case we already unlocked + want music
+    tryStartMusic();
   })
   .catch(console.error);
 
-// one-frame tap/click latch (menu uses it)
 let tapPressed = false;
 canvas.addEventListener(
   "pointerdown",
   (e) => {
     e.preventDefault();
     tapPressed = true;
-    unlockAudioOnce(); // <-- critical: event-based unlock
+    unlockAudioOnce();
   },
   { passive: false }
 );
 
-// Keyboard-based unlock (covers "press any key" starts)
 addEventListener(
   "keydown",
   () => {
-    unlockAudioOnce(); // <-- critical: event-based unlock
+    unlockAudioOnce();
   },
   { passive: true }
 );
 
 (async () => {
-  // Start loading immediately, but show menu first.
   let game: Game | null = null;
   let gameReady = false;
 
-  // bind keyboard immediately so menu can use keys too.
-  // invert toggle becomes live once the game exists.
   bindKeyboard(keys, () => game?.toggleInvert());
 
   createGame(VIRTUAL_W, VIRTUAL_H, { sound })
@@ -119,7 +110,6 @@ addEventListener(
     })
     .catch(console.error);
 
-  // Minimal “safe” placeholders for blitter until game arrives
   const dummyCam = { x: 0, y: 0 };
   const dummyBG = { sampleScreen: (_x: number, _y: number) => false };
 
@@ -133,7 +123,6 @@ addEventListener(
     getInvert: () => false,
   });
 
-  // Scene manager: start at menu, transition to game when ready + input
   const mgr = createSceneManager(
     createMenuScene({
       keys,
@@ -142,13 +131,11 @@ addEventListener(
       start: () => {
         if (!game) return;
 
-        // We only request music here; actual playback waits for unlock+ready.
         wantMusic = true;
         tryStartMusic();
 
         mgr.set(createGameScene(game, keys));
 
-        // patch blitter to read from the live game
         const liveBlit = createOneBitBlitter({
           w: VIRTUAL_W,
           h: VIRTUAL_H,
@@ -167,24 +154,35 @@ addEventListener(
     })
   );
 
-  // Wrap blit so we can hot-swap after game loads without re-threading the loop
   const blit = () => {
     const impl = (blit1bit as any).__impl as undefined | (() => void);
     (impl ?? blit1bit)();
   };
 
+  // --- Framerate Gating Logic ---
   let last = performance.now();
+  const FPS = 60;
+  const FRAME_MIN_TIME = 1000 / FPS; 
+
   function frame(now: number) {
-    const dt = Math.min(0.05, (now - last) / 1000);
-    last = now;
+    const elapsed = now - last;
 
-    mgr.update(dt);
+    // Only update and draw if enough time has passed for a 30fps frame
+    if (elapsed >= FRAME_MIN_TIME) {
+      // Calculate delta time in seconds, clamped to avoid physics glitches
+      const dt = Math.min(0.1, elapsed / 1000);
+      
+      // Steady timing adjustment
+      last = now - (elapsed % FRAME_MIN_TIME);
 
-    // clear one-frame tap
-    tapPressed = false;
+      mgr.update(dt);
 
-    mgr.draw(offCtx, VIRTUAL_W, VIRTUAL_H);
-    blit();
+      // Reset one-frame input state
+      tapPressed = false;
+
+      mgr.draw(offCtx, VIRTUAL_W, VIRTUAL_H);
+      blit();
+    }
 
     requestAnimationFrame(frame);
   }
