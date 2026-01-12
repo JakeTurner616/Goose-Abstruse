@@ -136,7 +136,7 @@
   </object>
   <object id="3" x="8" y="48">
    <properties>
-    <property name="msg" value="Move with WASD or ARROW keys"/>
+    <property name="msg" value="Move with ARROW keys"/>
    </properties>
    <polygon points="0,0 0,64 120,64 120,0"/>
   </object>

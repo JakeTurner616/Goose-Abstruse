@@ -168,12 +168,22 @@ function ditherMaskBlack(ctx: CanvasRenderingContext2D, vw: number, vh: number, 
 }
 
 // -----------------------------------------------------------------------------
-// Slides (minimal content only, with final "THANKS FOR PLAYING!" held forever)
+// Slides
 // -----------------------------------------------------------------------------
 type Slide = {
   title?: string;
   lines: string[];
 };
+
+// Epilogue plays BEFORE credits.
+function epilogueSlides(): Slide[] {
+  return [
+    {
+      title: "THE END",
+      lines: ["YOU MADE IT TO THE SURFACE", "CONGRATULATIONS"],
+    }
+  ];
+}
 
 function creditsSlides(): Slide[] {
   return [
@@ -208,9 +218,8 @@ type RenderedSlide = {
   img: HTMLCanvasElement;
 };
 
-function prerenderSlides(vw: number, vh: number) {
+function prerenderSlides(vw: number, vh: number, slides: Slide[]) {
   const pix = createPixText();
-  const slides = creditsSlides();
 
   const PAD_X = 10;
   const MAX_W = vw - PAD_X * 2;
@@ -284,13 +293,13 @@ function prerenderSlides(vw: number, vh: number) {
 }
 
 // -----------------------------------------------------------------------------
-// Credits Scene (slide show with dither fades; final slide holds forever)
+// Credits Scene (epilogue -> credits slideshow with dither fades; final holds forever)
 // -----------------------------------------------------------------------------
 export function createCreditsScene(opts: {
   keys: Keys;
   getTap: () => boolean;
 
-  // called when credits become active / inactive (used for music)
+  // called when scene becomes active / inactive (used for music)
   onEnter?: () => void;
   onExit?: () => void;
 
@@ -298,6 +307,9 @@ export function createCreditsScene(opts: {
   back?: () => void;
 }): Scene {
   let rendered: RenderedSlide[] | null = null;
+
+  // Epilogue + Credits combined (epilogue first)
+  const SLIDES: Slide[] = [...epilogueSlides(), ...creditsSlides()];
 
   // Longer duration per slide (requested)
   const HOLD_SEC = 7.25; // time fully visible
@@ -315,7 +327,7 @@ export function createCreditsScene(opts: {
 
   function ensure(vw: number, vh: number) {
     if (rendered) return;
-    rendered = prerenderSlides(vw, vh);
+    rendered = prerenderSlides(vw, vh, SLIDES);
   }
 
   function isFinal(): boolean {
@@ -351,7 +363,7 @@ export function createCreditsScene(opts: {
       const rising = now && !prevPressed;
       prevPressed = now;
 
-      // No "tap to continue" prompts; but allow skipping earlier slides.
+      // No "tap to continue" prompts; but allow skipping earlier slides (epilogue included).
       if (rising && !isFinal()) {
         goNext();
         return;
