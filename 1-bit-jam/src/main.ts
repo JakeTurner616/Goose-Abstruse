@@ -304,7 +304,7 @@ declare global {
   let game: Game | null = null;
   let gameReady = false;
 
-  bindKeyboard(keys, () => game?.toggleInvert());
+  bindKeyboard(keys);
 
   const dummyCam = { x: 0, y: 0 };
   const dummyBG = { sampleScreen: (_x: number, _y: number) => false };
