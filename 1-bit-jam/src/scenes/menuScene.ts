@@ -322,22 +322,23 @@ export function createMenuScene(opts: {
 
       const beat = 2.6;
       const f = ((t % beat) * 60) | 0;
-      const punchX = f === 0 || f === 1 ? 1 : 0;
+      const punchX = 0;
 
       const size = 16;
       offCtx.font = `bold ${size}px monospace`;
 
       offCtx.fillStyle = "#000";
-      offCtx.fillText("waterfowl", (cx + 1 + punchX) | 0, (titleY + 1 + bobY) | 0);
+      offCtx.fillText("Goose", (cx + 1 + punchX) | 0, (titleY + 1 + bobY - 8) | 0);
+      offCtx.fillText("Abstruse", (cx + 1 + punchX) | 0, (titleY + 1 + bobY + 8) | 0);
 
       offCtx.fillStyle = "#fff";
-      offCtx.fillText("waterfowl", (cx + punchX) | 0, (titleY + bobY) | 0);
-
+      offCtx.fillText("Goose", (cx + punchX) | 0, (titleY + bobY - 8) | 0);
+      offCtx.fillText("Abstruse", (cx + punchX) | 0, (titleY + bobY + 8) | 0);
       // ---------------------------------------------------------------------
       // SUBTITLE: pixel-text (crisp, no blur)
       // ---------------------------------------------------------------------
-      const sub = "ROUND UP THE GOSLINGS";
-      const subY = (vh * 0.40) | 0;
+      const sub = "Round up the goslings!";
+      const subY = (vh * 0.45) | 0;
       const subStep = (((t * 6) | 0) & 7) === 2 ? 1 : 0;
 
       const subScale = 0.7; // crisp + small (3x5 font)

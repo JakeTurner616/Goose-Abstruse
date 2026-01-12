@@ -52,12 +52,13 @@ export function createOggMusic(opts: CreateOggMusicOpts = {}): OggMusic {
 
   function killSource() {
     if (!src) return;
+    const s = src;
     try {
-      src.onended = null;
-      src.stop();
+      s.onended = null;
+      s.stop();
     } catch {}
     try {
-      src.disconnect();
+      s.disconnect();
     } catch {}
     src = null;
     playing = false;
@@ -80,7 +81,6 @@ export function createOggMusic(opts: CreateOggMusicOpts = {}): OggMusic {
     if (!buf) return;
 
     // Some browsers require ctx.resume() after a user gesture.
-    // We try; if it fails, no big deal.
     if (ctx.state !== "running") {
       void ctx.resume().catch(() => {});
     }
@@ -97,6 +97,7 @@ export function createOggMusic(opts: CreateOggMusicOpts = {}): OggMusic {
     s.buffer = buf;
     s.loop = loop;
     s.connect(musicGain);
+
     s.onended = () => {
       // If it ended naturally (non-loop), reflect state.
       if (src === s) {
@@ -112,7 +113,6 @@ export function createOggMusic(opts: CreateOggMusicOpts = {}): OggMusic {
     try {
       s.start();
     } catch {
-      // If start fails (rare), mark not playing
       src = null;
       playing = false;
     }
@@ -127,21 +127,39 @@ export function createOggMusic(opts: CreateOggMusicOpts = {}): OggMusic {
       return;
     }
 
+    // IMPORTANT:
+    // Mark not-playing immediately so higher-level logic can start another track
+    // without being blocked by "still fading out" state.
+    const s = src;
+    src = null;
+    playing = false;
+
     const t0 = ctx.currentTime;
     const t1 = t0 + fadeSec;
 
-    // Fade out and then stop
-    musicGain.gain.cancelScheduledValues(t0);
-    musicGain.gain.setValueAtTime(musicGain.gain.value, t0);
-    musicGain.gain.linearRampToValueAtTime(0, t1);
-
-    const s = src;
-    // Schedule stop slightly after fade completes
     try {
+      // Fade out and then stop
+      musicGain.gain.cancelScheduledValues(t0);
+      musicGain.gain.setValueAtTime(musicGain.gain.value, t0);
+      musicGain.gain.linearRampToValueAtTime(0, t1);
+    } catch {}
+
+    try {
+      s.onended = null; // we already detached state above
       s.stop(t1 + 0.01);
     } catch {
-      killSource();
+      try {
+        s.stop();
+      } catch {}
     }
+
+    // Best-effort disconnect after stop (avoid node leaks)
+    const ms = ((fadeSec + 0.06) * 1000) | 0;
+    setTimeout(() => {
+      try {
+        s.disconnect();
+      } catch {}
+    }, ms);
   }
 
   function setVolume(v: number) {

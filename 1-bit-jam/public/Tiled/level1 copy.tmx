@@ -174,7 +174,7 @@
    <properties>
     <property name="msg" value="Press X to switch the gosling view"/>
    </properties>
-   <polygon points="0,0 122.976,0 122.976,87.1286 -0.856978,87.5848"/>
+   <polygon points="0,0 144,0 144,88 -0.856978,87.5848"/>
   </object>
   <object id="2" x="144" y="48">
    <properties>

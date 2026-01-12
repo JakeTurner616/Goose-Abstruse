@@ -55,6 +55,12 @@ export type CreateGameOpts = {
   // music hooks (main.ts owns the ogg players)
   onWinMusicBegin?: () => void;
   onWinMusicEnd?: () => void;
+
+  // normal (non-win) music: let main.ts pick the per-level track
+  onLevelMusic?: (levelIndex: number) => void;
+
+  // called when the FINAL level is completed
+  onGameComplete?: () => void;
 };
 
 type Aabb = { x: number; y: number; w: number; h: number };
@@ -134,6 +140,29 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     playUiClick: () => play("uiClick", { volume: 0.25, minGapMs: 80 }),
   });
 
+  // pending level index for “we are transitioning to this level”
+  let pendingLevelIndex = -1;
+
+  function setPendingLevelIndex(i: number) {
+    pendingLevelIndex = i | 0;
+  }
+
+  function clearPendingLevelIndex() {
+    pendingLevelIndex = -1;
+  }
+
+  function emitLevelMusic(i: number) {
+    try {
+      opts?.onLevelMusic?.(i | 0);
+    } catch {}
+  }
+
+  function computeNextLevelIndex() {
+    const idx = runtime.levelIndex | 0;
+    const cnt = Math.max(1, runtime.levelCount | 0);
+    return ((idx + 1) % cnt) | 0;
+  }
+
   // world/entities + loading
   const runtime = createLevelRuntime({
     levels: opts?.levels,
@@ -151,11 +180,31 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
       ui.clear();
       sequences.resetAll();
       camFocus.reset();
+
+      // tell main.ts which normal track should be active for the incoming level
+      const idx = pendingLevelIndex >= 0 ? pendingLevelIndex : (runtime.levelIndex | 0);
+      emitLevelMusic(idx);
+
+      // IMPORTANT: don't let a stale pending index survive into later transitions
+      clearPendingLevelIndex();
+
       try {
         opts?.onWinMusicEnd?.();
       } catch {}
     },
   });
+
+  // ---- wrappers that MUST be used for transitions (so music can track correctly)
+  function doLoadLevel(i: number) {
+    setPendingLevelIndex(i);
+    runtime.loadLevel(i);
+  }
+
+  function doNextLevel() {
+    const next = computeNextLevelIndex();
+    setPendingLevelIndex(next);
+    runtime.nextLevel();
+  }
 
   // sequences (win/death hold)
   const sequences = createSequenceController({
@@ -177,11 +226,26 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
         opts?.onWinMusicEnd?.();
       } catch {}
     },
-    onWinDone: () => runtime.nextLevel(),
-    onDeathDone: () => runtime.loadLevel(runtime.levelIndex),
+    onWinDone: () => {
+      const idx = runtime.levelIndex | 0;
+      const cnt = Math.max(1, runtime.levelCount | 0);
+      if (idx >= cnt - 1) {
+        try {
+          opts?.onGameComplete?.();
+        } catch {}
+        return;
+      }
+
+      // IMPORTANT: use the wrapper so pendingLevelIndex is set
+      doNextLevel();
+    },
+    onDeathDone: () => doLoadLevel(runtime.levelIndex),
   });
 
   await runtime.init();
+
+  // initial level: pick correct normal music immediately
+  emitLevelMusic(runtime.levelIndex | 0);
 
   function updateHud(dt: number) {
     hud.setCounts({
@@ -206,39 +270,39 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
   }
 
   function anyEntityOnSpikes(world: TiledWorld, allEntities: Player[]) {
-  const spikeIdx = SPIKE_LOCAL_INDEXES;
+    const spikeIdx = SPIKE_LOCAL_INDEXES;
 
-  // Make goslings a bit more forgiving than the player.
-  // (Bigger inset + slightly lifted feet check.)
-  const PAD_PLAYER = 2;
-  const PAD_BABY = 4;
-  const LIFT_PLAYER = 0;
-  const LIFT_BABY = 1;
+    // Make goslings a bit more forgiving than the player.
+    // (Bigger inset + slightly lifted feet check.)
+    const PAD_PLAYER = 2;
+    const PAD_BABY = 4;
+    const LIFT_PLAYER = 0;
+    const LIFT_BABY = 1;
 
-  for (const e of allEntities) {
-    const isBaby = e !== runtime.player;
+    for (const e of allEntities) {
+      const isBaby = e !== runtime.player;
 
-    const pad = isBaby ? PAD_BABY : PAD_PLAYER;
-    const lift = isBaby ? LIFT_BABY : LIFT_PLAYER;
+      const pad = isBaby ? PAD_BABY : PAD_PLAYER;
+      const lift = isBaby ? LIFT_BABY : LIFT_PLAYER;
 
-    // IMPORTANT: hazards use FEET collider, not center collider
-    const collider = hazardCollider(e);
+      // IMPORTANT: hazards use FEET collider, not center collider
+      const collider = hazardCollider(e);
 
-    // shrink + lift so babies need a more "committed" overlap to die
-    const reduced = {
-      x: collider.x + pad,
-      y: collider.y + pad - lift,
-      w: Math.max(1, collider.w - pad * 2),
-      h: Math.max(1, collider.h - pad * 2),
-    };
+      // shrink + lift so babies need a more "committed" overlap to die
+      const reduced = {
+        x: collider.x + pad,
+        y: collider.y + pad - lift,
+        w: Math.max(1, collider.w - pad * 2),
+        h: Math.max(1, collider.h - pad * 2),
+      };
 
-    for (let i = 0; i < spikeIdx.length; i++) {
-      if (aabbOverlapsTileLocalIndex(world, reduced, spikeIdx[i], ["tile", "collide"])) return true;
+      for (let i = 0; i < spikeIdx.length; i++) {
+        if (aabbOverlapsTileLocalIndex(world, reduced, spikeIdx[i], ["tile", "collide"])) return true;
+      }
     }
-  }
 
-  return false;
-}
+    return false;
+  }
 
   function update(dt: number, keys: Keys) {
     const player = runtime.player;
@@ -437,8 +501,8 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
       sfx.userGesture();
     },
 
-    loadLevel: (i: number) => runtime.loadLevel(i),
-    nextLevel: () => runtime.nextLevel(),
+    loadLevel: (i: number) => doLoadLevel(i | 0),
+    nextLevel: () => doNextLevel(),
     getLevelIndex() {
       return runtime.levelIndex | 0;
     },
