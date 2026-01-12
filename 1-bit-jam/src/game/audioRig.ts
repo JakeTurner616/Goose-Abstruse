@@ -2,34 +2,28 @@
 import type { SoundSystem } from "../sound";
 import { createSoundSystem } from "../sound";
 import { loadSoundBank, type SoundBank } from "../soundBank";
+import { assetUrl } from "../assetUrl";
 
 export type PlayOpts = { volume?: number; detune?: number; minGapMs?: number };
 
+// Only these two are external jsfxr JSON assets.
+// Everything else uses built-in presets.
 const SFX_PATHS: Record<string, string> = {
-  uiClick: "/Sounds/uiClick.json",
-  uiConfirm: "/Sounds/uiConfirm.json",
-  invert: "/Sounds/invert.json",
-  jump: "/Sounds/jump.json",
-  bump: "/Sounds/bump.json",
-  keyPickup: "/Sounds/keyPickup.json",
-  doorOpen: "/Sounds/doorOpen.json",
-
-  // kept loaded so you can still use it later if you want,
-  // but "death" playback below will use the preset to avoid silent failures.
-  death: "/Sounds/laserShoot.json",
+  jump: assetUrl("Sounds/jump.json"),
+  death: assetUrl("Sounds/laserShoot.json"),
 };
 
 export function createAudioRig(injected?: SoundSystem) {
   const sfx: SoundSystem = injected ?? createSoundSystem({ volume: 0.15 });
   let bank: SoundBank | null = null;
 
+  // Load only jump + death from the bank. If this fails (missing files), we still work via presets.
   loadSoundBank(sfx, SFX_PATHS)
     .then((b) => (bank = b))
     .catch(() => (bank = null));
 
   function playDeath(opts2?: PlayOpts) {
-    // Hard guarantee: always make a sound on death.
-    // (Avoids SoundBank "missing key => silent return" and any weird JSON shape issues.)
+    // Hard guarantee: always make a sound on death even if bank is missing / malformed.
     sfx.playPreset("laserShoot", {
       ...(opts2 || {}),
       volume: opts2?.volume ?? 0.75,
@@ -38,40 +32,50 @@ export function createAudioRig(injected?: SoundSystem) {
     });
   }
 
-  function fallbackPlay(name: string, opts2?: PlayOpts) {
+  function presetFallback(name: string, opts2?: PlayOpts) {
     if (name === "jump") sfx.playPreset("jump", opts2);
     else if (name === "keyPickup") sfx.playPreset("pickupCoin", opts2);
     else if (name === "doorOpen") sfx.playPreset("powerUp", opts2);
     else if (name === "bump") sfx.playPreset("hitHurt", opts2);
     else if (name === "invert") sfx.playPreset("blipSelect", opts2);
     else if (name === "uiConfirm") sfx.playPreset("powerUp", opts2);
-    else if (name === "death") playDeath(opts2);
+    else if (name === "uiClick") sfx.playPreset("click", opts2);
     else sfx.playPreset("click", opts2);
+  }
+
+  function tryBankPlay(name: string, opts2?: PlayOpts): boolean {
+    if (!bank) return false;
+
+    // Only ever attempt bank playback for the two external clips.
+    if (name !== "jump" && name !== "death") return false;
+
+    try {
+      // Some bank implementations store definitions under defs; if missing, don't call play().
+      if ((bank as any).defs && !(bank as any).defs[name]) return false;
+      bank.play(name, opts2);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function play(name: string, opts2?: PlayOpts) {
     // Special-case death so it can never silently fail.
     if (name === "death") {
-      playDeath(opts2);
+      // If bank has it, it may play; but we STILL guarantee a sound.
+      if (!tryBankPlay("death", opts2)) playDeath(opts2);
+      else playDeath(opts2); // guarantee (keeps your original behavior)
       return;
     }
 
-    if (!bank) {
-      fallbackPlay(name, opts2);
+    // Jump: prefer bank if available; otherwise preset.
+    if (name === "jump") {
+      if (!tryBankPlay("jump", opts2)) presetFallback("jump", opts2);
       return;
     }
 
-    try {
-      // This can still be silent if the key doesn't exist (SoundBank.play returns),
-      // so we defensively verify the key exists before calling play().
-      if (!bank.defs || !bank.defs[name]) {
-        fallbackPlay(name, opts2);
-        return;
-      }
-      bank.play(name, opts2);
-    } catch {
-      fallbackPlay(name, opts2);
-    }
+    // Everything else is presets only.
+    presetFallback(name, opts2);
   }
 
   return { sfx, play };

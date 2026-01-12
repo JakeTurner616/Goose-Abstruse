@@ -6,6 +6,7 @@ import { loadKeyAtlas, createKeyEntity, type KeyEntity, type KeyAtlas } from "..
 import { clamp } from "./math";
 import { scanSpawnPoints, type SpawnPoint } from "./spawn";
 import { snapToPixel } from "./pixel";
+import { assetUrl } from "../assetUrl";
 
 export type LevelRuntime = {
   // world/entities
@@ -75,12 +76,12 @@ type PreparedLevel = {
 };
 
 export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
-  const LEVELS = (opts.levels?.length ? opts.levels : ["/Tiled/level1.tmx", "/Tiled/level1 copy.tmx"]).slice();
+  const LEVELS = (opts.levels?.length ? opts.levels : ["./Tiled/level1.tmx", "./Tiled/level1 copy.tmx"]).slice();
   let levelIndex = clamp(opts.startLevel ?? 0, 0, Math.max(0, LEVELS.length - 1)) | 0;
 
   // "visible" loading (used for boot/death/manual loads)
   let loadingLevel = false;
-  let pendingLoad: Promise<void> | null = null;
+
 
   let world: TiledWorld | null = null;
   let player!: Player;
@@ -296,17 +297,9 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
     loadingLevel = true;
     opts.setUiMessage("LOADING...");
 
-    const url = LEVELS[levelIndex];
 
-    pendingLoad = (async () => {
-      try {
-        const next = await loadTiled(url);
-        await applyLoadedWorld(next);
-      } finally {
-        loadingLevel = false;
-        pendingLoad = null;
-      }
-    })();
+
+    
   }
 
   function nextLevel() {
@@ -314,18 +307,20 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
     loadLevel(((levelIndex + 1) % LEVELS.length) | 0);
   }
 
-  async function init() {
-    const [p, firstWorld, ka] = await Promise.all([
-      createPlayer({ x: 24, y: 24 }),
-      loadTiled(LEVELS[levelIndex]),
-      loadKeyAtlas(opts.keyAtlasPath ?? "/Key/").catch(() => null),
-    ]);
+async function init() {
+  const [p, firstWorld, ka] = await Promise.all([
+    createPlayer({ x: 24, y: 24 }),
+    loadTiled(LEVELS[levelIndex]),
+    loadKeyAtlas(
+      assetUrl((opts.keyAtlasPath ?? "Key/").replace(/^\/+/, ""))
+    ).catch(() => null),
+  ]);
 
-    player = p;
-    keyAtlas = ka;
+  player = p;
+  keyAtlas = ka;
 
-    await applyLoadedWorld(firstWorld);
-  }
+  await applyLoadedWorld(firstWorld);
+}
 
   function incKeysCollected() {
     keysCollected = (keysCollected + 1) | 0;

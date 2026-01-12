@@ -37,13 +37,7 @@ function hits(x: number, y: number, w: number, h: number, solid: SolidTileQuery,
   return false;
 }
 
-function colSolid(tx: number, y: number, h: number, solid: SolidTileQuery, world: WorldInfo) {
-  const th = world.th | 0;
-  const y0 = (y / th) | 0,
-    y1 = ((y + h - 1) / th) | 0;
-  for (let ty = y0; ty <= y1; ty++) if (solid(tx, ty)) return true;
-  return false;
-}
+
 
 function rowSolid(ty: number, x: number, w: number, solid: SolidTileQuery, world: WorldInfo) {
   const tw = world.tw | 0;

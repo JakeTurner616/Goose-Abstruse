@@ -384,7 +384,7 @@ export function createSoundSystem(opts?: { volume?: number; muted?: boolean }): 
 
     const raw = ns.toBuffer(normalized);
     const samples = normalizeSamples(raw);
-    const sr = (normalized.sample_rate | 0) || 44100;
+    const sr = ((normalized.sample_rate ?? 44100) | 0) || 44100;
 
     const ab = makeAudioBuffer(samples, sr);
     cache.set(cacheKey, ab);

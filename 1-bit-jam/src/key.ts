@@ -55,7 +55,7 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 
 function parseFrameIndex(name: string) {
   const m = /frame(\d+)/i.exec(name);
-  return m ? (m[1] | 0) : 0;
+  return m ? (parseInt(m[1], 10) | 0) : 0;
 }
 
 export async function loadKeyAtlas(baseDir = "/Key/"): Promise<KeyAtlas> {

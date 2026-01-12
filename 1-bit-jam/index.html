@@ -5,60 +5,72 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>1 bit</title>
     <style>
-      :root{
-        --w:#fff;
-        --b:#000;
+      /* CRITICAL: Border-box ensures 964px is the FINAL outer width of the element */
+      *, *::before, *::after {
+        box-sizing: border-box;
       }
 
-      html, body { height: 100%; margin: 0; }
-      body{
-        display:grid;
-        place-items:center;
-        overflow:hidden;
+      :root {
+        --w: #fff;
+        --b: #000;
+        --canvas-w: 964px;
+        --canvas-h: 868px;
+      }
 
-        /* 1-bit background only */
+      html, body {
+        height: 100%;
+        margin: 0;
         background: var(--b);
         color: var(--w);
+      }
 
-        /* optional: subtle 1-bit texture (still only black/white) */
-        background-image:
-          radial-gradient(circle at 1px 1px, var(--w) 1px, transparent 1.1px);
+      body {
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+        background-image: radial-gradient(circle at 1px 1px, var(--w) 1px, transparent 1.1px);
         background-size: 24px 24px;
         background-color: var(--b);
       }
 
-      /* The real canvas is scaled by JS (integer scale). */
-      canvas{
-image-rendering: pixelated;
-  image-rendering: crisp-edges;
-
-        /* 1-bit canvas backing (in case you ever see clears) */
-        background: var(--b);
-
-        /* hard, 1-bit border instead of soft shadow */
-        border: 2px solid var(--w);
-        box-shadow: none;
-      }
-
-      /* 1-bit “frame” (no gradients, no alpha shading) */
-      .frame{
+      .frame {
+        /* This container wraps the canvas tightly */
         padding: 14px;
         border: 2px solid var(--w);
         background: var(--b);
         border-radius: 18px;
+        line-height: 0; /* Prevents 1-4px "ghost" gaps at the bottom/side */
+        display: inline-block;
       }
 
-      /* optional: tighter look on small screens */
-      @media (max-width: 520px){
-        .frame{ padding: 10px; border-radius: 14px; }
-        canvas{ border-width: 2px; }
+      canvas {
+        /* Set the CSS width to match the internal resolution EXACTLY */
+        width: var(--canvas-w);
+        height: var(--canvas-h);
+        
+        display: block; /* Prevents canvas from being treated like text (inline) */
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+        background: var(--b);
+        border: 2px solid var(--w);
+        
+        /* Safety for small screens */
+        max-width: calc(100vw - 64px); 
+        height: auto;
+        aspect-ratio: 964 / 868;
+      }
+
+      @media (max-width: 520px) {
+        .frame { padding: 10px; border-radius: 14px; }
       }
     </style>
   </head>
   <body>
+
     <div class="frame">
-      <canvas id="game"></canvas>
+      <canvas id="game" width="964" height="868"></canvas>
     </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

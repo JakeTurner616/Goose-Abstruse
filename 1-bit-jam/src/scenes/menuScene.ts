@@ -320,8 +320,8 @@ export function createMenuScene(opts: {
       const step = ((t * 8) | 0) & 3;
       const bobY = step === 1 ? 1 : step === 3 ? -1 : 0;
 
-      const beat = 2.6;
-      const f = ((t % beat) * 60) | 0;
+
+
       const punchX = 0;
 
       const size = 16;

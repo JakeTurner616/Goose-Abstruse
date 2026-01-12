@@ -66,7 +66,11 @@ function parseXml(txt: string): Document {
   if (doc.getElementsByTagName("parsererror")[0]) throw new Error("XML parse error");
   return doc;
 }
-
+function attrInt(el: Element, name: string, def = 0): number {
+  const s = el.getAttribute(name);
+  const n = s ? parseInt(s, 10) : def;
+  return (n | 0) || def;
+}
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((res, rej) => {
     const img = new Image();
@@ -329,15 +333,15 @@ export async function loadTiled(tmxUrl: string): Promise<TiledWorld> {
   const mapEl = tmx.getElementsByTagName("map")[0];
   if (!mapEl) throw new Error("TMX: missing <map>");
 
-  const w = mapEl.getAttribute("width")! | 0;
-  const h = mapEl.getAttribute("height")! | 0;
-  const tw = mapEl.getAttribute("tilewidth")! | 0;
-  const th = mapEl.getAttribute("tileheight")! | 0;
+const w = attrInt(mapEl, "width");
+const h = attrInt(mapEl, "height");
+const tw = attrInt(mapEl, "tilewidth");
+const th = attrInt(mapEl, "tileheight");
 
   const tilesetEl = tmx.getElementsByTagName("tileset")[0];
   if (!tilesetEl) throw new Error("TMX: missing <tileset>");
 
-  const firstgid = tilesetEl.getAttribute("firstgid")! | 0;
+  const firstgid = attrInt(tilesetEl, "firstgid");
   const tsxRel = tilesetEl.getAttribute("source");
   if (!tsxRel) throw new Error("TMX: tileset source missing");
 
@@ -348,10 +352,10 @@ export async function loadTiled(tmxUrl: string): Promise<TiledWorld> {
   const tsxRoot = tsx.getElementsByTagName("tileset")[0];
   if (!tsxRoot) throw new Error("TSX: missing <tileset>");
 
-  const tsTw = tsxRoot.getAttribute("tilewidth")! | 0;
-  const tsTh = tsxRoot.getAttribute("tileheight")! | 0;
-  const columns = tsxRoot.getAttribute("columns")! | 0;
-  const tilecount = tsxRoot.getAttribute("tilecount")! | 0;
+const tsTw = attrInt(tsxRoot, "tilewidth");
+const tsTh = attrInt(tsxRoot, "tileheight");
+const columns = attrInt(tsxRoot, "columns");
+const tilecount = attrInt(tsxRoot, "tilecount");
 
   const imgEl = tsx.getElementsByTagName("image")[0];
   if (!imgEl) throw new Error("TSX: missing <image>");

@@ -5,6 +5,8 @@
 // - no smoothing during raster steps
 // Prevents “ghosting/opacity” artifacts, especially when downscaling.
 
+import { assetUrl } from "./assetUrl";
+
 export type AnimName = "idle" | "walk" | "flap";
 
 type BakedFrame = HTMLCanvasElement;
@@ -34,7 +36,13 @@ const loadImage = (src: string) =>
     img.decoding = "async";
     img.onload = () => res(img);
     img.onerror = rej;
-    img.src = src;
+
+    // IMPORTANT: never allow absolute-root paths on itch.
+    // assetUrl() also strips leading slashes if any callers pass them.
+    img.src = assetUrl(src);
+
+    // If you ever load cross-origin images in the future, you can uncomment this:
+    // img.crossOrigin = "anonymous";
   });
 
 const unionBox = (a: BBox, b: BBox): BBox => {
@@ -58,7 +66,13 @@ const expandBox = (b: BBox, pad: number, w: number, h: number): BBox => {
   };
 };
 
-function frameBBox(img: HTMLImageElement, i: number, fw: number, fh: number, alphaCut = ALPHA_CUT): BBox {
+function frameBBox(
+  img: HTMLImageElement,
+  i: number,
+  fw: number,
+  fh: number,
+  alphaCut = ALPHA_CUT
+): BBox {
   const c = document.createElement("canvas");
   c.width = fw;
   c.height = fh;
@@ -103,7 +117,7 @@ function bakeStrip(opts: {
   outH: number;
   bw?: number;
 }): BakedFrame[] {
-  const { img, n, fw,  crop, outW, outH, bw = 128 } = opts;
+  const { img, n, fw, crop, outW, outH, bw = 128 } = opts;
   const cw = Math.max(1, crop.x1 - crop.x0);
   const ch = Math.max(1, crop.y1 - crop.y0);
 
@@ -157,9 +171,10 @@ async function loadImgs() {
   return (
     imgsP ??
     (imgsP = (async () => ({
-      idle: await loadImage("/Sprites/Idle.png"),
-      walk: await loadImage("/Sprites/Walk.png"),
-      flap: await loadImage("/Sprites/Flap.png"),
+      // NOTE: pass paths WITHOUT leading slash; assetUrl() also tolerates it.
+      idle: await loadImage("Sprites/Idle.png"),
+      walk: await loadImage("Sprites/Walk.png"),
+      flap: await loadImage("Sprites/Flap.png"),
     }))())
   );
 }

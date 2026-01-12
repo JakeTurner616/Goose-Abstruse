@@ -30,6 +30,8 @@ import {
   WIN_HOLD_SEC,
 } from "./game/constants";
 
+import { assetUrl } from "./assetUrl";
+
 export type Game = {
   cam: Cam;
   get invert(): boolean;
@@ -165,34 +167,37 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
 
   // world/entities + loading
   const runtime = createLevelRuntime({
-    levels: opts?.levels,
-    startLevel: opts?.startLevel,
-    keyAtlasPath: "/Key/",
-    setUiMessage: (m) => ui.set(m),
-    onWorldApplied: (w) => camFocus.setWorld(w),
-    onEntitiesPlaced: (player, babies) => {
-      camFocus.setTargets(player, babies);
-      camFocus.reset();
-      camFocus.update(0);
-    },
-    onResetForNewLevel: () => {
-      doorFx.reset?.();
-      ui.clear();
-      sequences.resetAll();
-      camFocus.reset();
+  levels: opts?.levels,
+  startLevel: opts?.startLevel,
 
-      // tell main.ts which normal track should be active for the incoming level
-      const idx = pendingLevelIndex >= 0 ? pendingLevelIndex : (runtime.levelIndex | 0);
-      emitLevelMusic(idx);
+  // IMPORTANT: never pass a raw "/Key/" or "./Key/" here.
+  // This must resolve under Vite's BASE_URL on itch.
+  keyAtlasPath: assetUrl("Key/"),
 
-      // IMPORTANT: don't let a stale pending index survive into later transitions
-      clearPendingLevelIndex();
+  setUiMessage: (m) => ui.set(m),
+  onWorldApplied: (w) => camFocus.setWorld(w),
+  onEntitiesPlaced: (player, babies) => {
+    camFocus.setTargets(player, babies);
+    camFocus.reset();
+    camFocus.update(0);
+  },
+  onResetForNewLevel: () => {
+    ui.clear();
+    sequences.resetAll();
+    camFocus.reset();
 
-      try {
-        opts?.onWinMusicEnd?.();
-      } catch {}
-    },
-  });
+    // tell main.ts which normal track should be active for the incoming level
+    const idx = pendingLevelIndex >= 0 ? pendingLevelIndex : (runtime.levelIndex | 0);
+    emitLevelMusic(idx);
+
+    // IMPORTANT: don't let a stale pending index survive into later transitions
+    clearPendingLevelIndex();
+
+    try {
+      opts?.onWinMusicEnd?.();
+    } catch {}
+  },
+});
 
   // ---- wrappers that MUST be used for transitions (so music can track correctly)
   function doLoadLevel(i: number) {

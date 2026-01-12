@@ -11,6 +11,8 @@ import { createCreditsScene } from "./scenes/creditsScene";
 import { createSoundSystem } from "./sound";
 import { createOggMusic, type OggMusic } from "./musicOgg";
 
+import { assetUrl } from "./assetUrl";
+
 const VIRTUAL_W = 160;
 const VIRTUAL_H = 144;
 
@@ -20,6 +22,12 @@ const MASTER_VOLUME = 0.05;
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d", { alpha: false })!;
 ctx.imageSmoothingEnabled = false;
+
+// Make the canvas focusable so keyboard works reliably after clicking.
+canvas.tabIndex = 0;
+canvas.style.outline = "none";
+(canvas.style as any).touchAction = "none";
+
 canvas.width = VIRTUAL_W;
 canvas.height = VIRTUAL_H;
 
@@ -136,12 +144,15 @@ function setActiveLevelMusic(levelIndex: number) {
 
 function unlockAudioOnce() {
   if (audioUnlocked) return;
+
   audioUnlocked = true;
+
   sound.userGesture();
   musicA.userGesture();
   musicB.userGesture();
   winMusic.userGesture();
   creditsMusic.userGesture();
+
   tryStartMusic();
 }
 
@@ -179,8 +190,10 @@ function stopCreditsTrack() {
   creditsMusic.stop({ fadeSec: 0.04 });
 }
 
+// --- MUSIC LOADS (itch-safe via assetUrl) ---
+
 musicA
-  .load("/Music/tix0.ogg")
+  .load(assetUrl("Music/tix0.ogg"))
   .then(() => {
     musicAReady = true;
     tryStartMusic();
@@ -188,7 +201,7 @@ musicA
   .catch(console.error);
 
 musicB
-  .load("/Music/2trash2track.ogg")
+  .load(assetUrl("Music/2trash2track.ogg"))
   .then(() => {
     musicBReady = true;
     tryStartMusic();
@@ -196,24 +209,41 @@ musicB
   .catch(console.error);
 
 winMusic
-  .load("/Music/level-win.ogg")
+  .load(assetUrl("Music/level-win.ogg"))
   .then(() => {
     winReady = true;
   })
   .catch(console.error);
 
 creditsMusic
-  .load("/Music/kc-synthless2014edit.ogg")
+  .load(assetUrl("Music/kc-synthless2014edit.ogg"))
   .then(() => {
     creditsReady = true;
   })
   .catch(console.error);
 
+// ----------------------------------------------------------------------------
+// INPUT: keep pointer + keyboard happy when clicking in/out (iframe-safe)
+// ----------------------------------------------------------------------------
+
+// We only use capture-phase focus helpers; no window blur/focus music logic.
+
 let tapPressed = false;
+
+function focusCanvasFromUserGesture() {
+  // In some browsers/iframes, focusing immediately can throw; just ignore.
+  try {
+    canvas.focus({ preventScroll: true });
+  } catch {
+    // ignore
+  }
+}
+
 canvas.addEventListener(
   "pointerdown",
   (e) => {
     e.preventDefault();
+    focusCanvasFromUserGesture();
     tapPressed = true;
     unlockAudioOnce();
   },
@@ -223,9 +253,29 @@ canvas.addEventListener(
 addEventListener(
   "keydown",
   () => {
+    // If user clicked away then hits a key, ensure canvas regains focus so
+    // your keyboard state stays consistent across toggles.
+    focusCanvasFromUserGesture();
     unlockAudioOnce();
   },
   { passive: true }
+);
+
+// Optional: if click happens anywhere in the document, keep the canvas focusable.
+// This helps with "click off then click back on" in embeds, without relying on
+// window focus events (iframe-safe).
+document.addEventListener(
+  "pointerdown",
+  (e) => {
+    // Only refocus when the click is inside the frame wrapper / canvas area,
+    // or when the user explicitly clicks the canvas already (handled above).
+    // If you want more aggressive behavior, remove this guard.
+    const t = e.target as any;
+    if (t === canvas || (t && typeof t.closest === "function" && t.closest(".frame"))) {
+      focusCanvasFromUserGesture();
+    }
+  },
+  { passive: true, capture: true }
 );
 
 // -----------------------------------------------------------------------------
@@ -355,8 +405,6 @@ declare global {
     onWinMusicBegin: playWinTrack,
     onWinMusicEnd: restoreNormalTrack,
     onLevelMusic: (levelIndex: number) => {
-      // IMPORTANT: this can fire while previous tracks are fading out;
-      // setActiveLevelMusic now force-restarts when allowed.
       setActiveLevelMusic(levelIndex);
     },
     onGameComplete: () => {
