@@ -12,7 +12,7 @@ export const FINISH_LOCAL_INDEX = 77;
 export const SPIKE_LOCAL_INDEX = 76;
 
 // Win sequence timing
-export const WIN_HOLD_SEC = 1.2;
+export const WIN_HOLD_SEC = 3.5;
 
 // Death/respawn timing
 export const DEATH_HOLD_SEC = 0.65;

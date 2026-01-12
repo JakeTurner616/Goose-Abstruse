@@ -34,6 +34,10 @@ export type CreateSequenceControllerOpts = {
   playWinSfx(): void;
   playDeathSfx(): void;
 
+  // Music hooks
+  onWinBegin?: () => void;
+  onWinEnd?: () => void;
+
   // Actions when timers finish
   onWinDone(): void;
   onDeathDone(): void;
@@ -48,6 +52,8 @@ export function createSequenceController(opts: CreateSequenceControllerOpts): Se
     clearUi,
     playWinSfx,
     playDeathSfx,
+    onWinBegin,
+    onWinEnd,
     onWinDone,
     onDeathDone,
   } = opts;
@@ -84,6 +90,9 @@ export function createSequenceController(opts: CreateSequenceControllerOpts): Se
     winPlayed = false;
     freezeAll();
     setUiMessage("LEVEL COMPLETE!");
+    try {
+      onWinBegin?.();
+    } catch {}
   }
 
   function beginDeath() {
@@ -122,6 +131,9 @@ export function createSequenceController(opts: CreateSequenceControllerOpts): Se
 
       if (winT >= winHoldSec) {
         clearUi();
+        try {
+          onWinEnd?.();
+        } catch {}
         onWinDone();
       }
 

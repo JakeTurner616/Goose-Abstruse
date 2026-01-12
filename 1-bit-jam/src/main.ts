@@ -45,20 +45,37 @@ const sound = createSoundSystem({
   muted: false,
 });
 
+// share one AudioContext between both music players (so the gesture unlock applies to both)
+const musicCtx =
+  new (window.AudioContext || (window as any).webkitAudioContext)({
+    latencyHint: "interactive",
+  }) as AudioContext;
+
 const music = createOggMusic({
   volume: Math.min(1, MASTER_VOLUME * 12),
   muted: false,
+  ctx: musicCtx,
+});
+
+const winMusic = createOggMusic({
+  // louder than normal music
+  volume: Math.min(1, MASTER_VOLUME * 36),
+  muted: false,
+  ctx: musicCtx,
 });
 
 let audioUnlocked = false;
 let wantMusic = false;
+
 let musicReady = false;
+let winReady = false;
 
 function unlockAudioOnce() {
   if (audioUnlocked) return;
   audioUnlocked = true;
   sound.userGesture();
   music.userGesture();
+  winMusic.userGesture();
   tryStartMusic();
 }
 
@@ -70,11 +87,30 @@ function tryStartMusic() {
   music.play({ loop: true, restart: true });
 }
 
+function playWinTrack() {
+  if (!audioUnlocked) return;
+  if (!winReady) return;
+
+  music.stop({ fadeSec: 0.06 });
+  winMusic.play({ loop: false, restart: true });
+}
+function restoreNormalTrack() {
+  winMusic.stop({ fadeSec: 0.02 });
+  tryStartMusic();
+}
+
 music
   .load("/Music/tix0.ogg")
   .then(() => {
     musicReady = true;
     tryStartMusic();
+  })
+  .catch(console.error);
+
+winMusic
+  .load("/Music/level-win.ogg")
+  .then(() => {
+    winReady = true;
   })
   .catch(console.error);
 
@@ -103,7 +139,11 @@ addEventListener(
 
   bindKeyboard(keys, () => game?.toggleInvert());
 
-  createGame(VIRTUAL_W, VIRTUAL_H, { sound })
+  createGame(VIRTUAL_W, VIRTUAL_H, {
+    sound,
+    onWinMusicBegin: playWinTrack,
+    onWinMusicEnd: restoreNormalTrack,
+  })
     .then((g) => {
       game = g;
       gameReady = true;
@@ -162,17 +202,13 @@ addEventListener(
   // --- Framerate Gating Logic ---
   let last = performance.now();
   const FPS = 60;
-  const FRAME_MIN_TIME = 1000 / FPS; 
+  const FRAME_MIN_TIME = 1000 / FPS;
 
   function frame(now: number) {
     const elapsed = now - last;
 
-    // Only update and draw if enough time has passed for a 30fps frame
     if (elapsed >= FRAME_MIN_TIME) {
-      // Calculate delta time in seconds, clamped to avoid physics glitches
       const dt = Math.min(0.1, elapsed / 1000);
-      
-      // Steady timing adjustment
       last = now - (elapsed % FRAME_MIN_TIME);
 
       mgr.update(dt);

@@ -52,6 +52,10 @@ export type CreateGameOpts = {
   sound?: SoundSystem;
   levels?: string[];
   startLevel?: number;
+
+  // music hooks (main.ts owns the ogg players)
+  onWinMusicBegin?: () => void;
+  onWinMusicEnd?: () => void;
 };
 
 export async function createGame(vw: number, vh: number, opts?: CreateGameOpts): Promise<Game> {
@@ -95,6 +99,9 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
       ui.clear();
       sequences.resetAll();
       camFocus.reset();
+      try {
+        opts?.onWinMusicEnd?.();
+      } catch {}
     },
   });
 
@@ -107,7 +114,19 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     clearUi: () => ui.clear(),
     playWinSfx: () => play("uiConfirm", { volume: 0.65, minGapMs: 120 }),
     playDeathSfx: () => play("death", { volume: 0.7, minGapMs: 180 }),
-    onWinDone: () => runtime.nextLevel(),
+    onWinBegin: () => {
+      // start win music + preload next level during the hold
+      try {
+        opts?.onWinMusicBegin?.();
+      } catch {}
+      runtime.preloadNextLevel();
+    },
+    onWinEnd: () => {
+      try {
+        opts?.onWinMusicEnd?.();
+      } catch {}
+    },
+    onWinDone: () => runtime.nextLevel(), // nextLevel will now instant-swap if preloaded
     onDeathDone: () => runtime.loadLevel(runtime.levelIndex),
   });
 
@@ -135,21 +154,20 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     return true;
   }
 
-    function anyEntityOnSpikes(world: TiledWorld, allEntities: Player[]) {
-      for (const e of allEntities) {
-        // IMPORTANT: hazards use FEET collider, not center collider
-        const collider = hazardCollider(e);
-        const reduced = {
-          x: collider.x + 2,
-          y: collider.y + 2,
-          w: collider.w - 4,
-          h: collider.h - 4,
-        };
-        if (aabbOverlapsTileLocalIndex(world, reduced, SPIKE_LOCAL_INDEX, ["tile", "collide"])) return true;
-      }
-      return false;
+  function anyEntityOnSpikes(world: TiledWorld, allEntities: Player[]) {
+    for (const e of allEntities) {
+      // IMPORTANT: hazards use FEET collider, not center collider
+      const collider = hazardCollider(e);
+      const reduced = {
+        x: collider.x + 2,
+        y: collider.y + 2,
+        w: collider.w - 4,
+        h: collider.h - 4,
+      };
+      if (aabbOverlapsTileLocalIndex(world, reduced, SPIKE_LOCAL_INDEX, ["tile", "collide"])) return true;
     }
-
+    return false;
+  }
 
   function update(dt: number, keys: Keys) {
     const player = runtime.player;
