@@ -328,10 +328,10 @@ export function createMenuScene(opts: {
       offCtx.font = `bold ${size}px monospace`;
 
       offCtx.fillStyle = "#000";
-      offCtx.fillText("GOOSE JAM", (cx + 1 + punchX) | 0, (titleY + 1 + bobY) | 0);
+      offCtx.fillText("waterfowl", (cx + 1 + punchX) | 0, (titleY + 1 + bobY) | 0);
 
       offCtx.fillStyle = "#fff";
-      offCtx.fillText("GOOSE JAM", (cx + punchX) | 0, (titleY + bobY) | 0);
+      offCtx.fillText("waterfowl", (cx + punchX) | 0, (titleY + bobY) | 0);
 
       // ---------------------------------------------------------------------
       // SUBTITLE: pixel-text (crisp, no blur)

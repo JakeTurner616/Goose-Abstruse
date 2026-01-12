@@ -26,8 +26,7 @@ import {
   DEATH_HOLD_SEC,
   DOOR_LOCAL_INDEXES,
   FINISH_LOCAL_INDEX,
-  SPIKE_LOCAL_INDEX,
-  UI_TRIGGER_LOCAL_INDEX,
+  SPIKE_LOCAL_INDEXES,
   WIN_HOLD_SEC,
 } from "./game/constants";
 
@@ -57,6 +56,59 @@ export type CreateGameOpts = {
   onWinMusicBegin?: () => void;
   onWinMusicEnd?: () => void;
 };
+
+type Aabb = { x: number; y: number; w: number; h: number };
+
+function aabbOverlapsAabb(a: Aabb, b: Aabb) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// standard ray-cast point-in-poly
+function pointInPoly(px: number, py: number, pts: { x: number; y: number }[]) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i].x,
+      yi = pts[i].y;
+    const xj = pts[j].x,
+      yj = pts[j].y;
+
+    const intersect =
+      yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi + 1e-12) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// AABB vs polygon overlap heuristic (fast + solid for “player enters zone” triggers):
+// - quick AABB reject
+// - if any AABB corner inside poly => overlap
+// - if any poly vertex inside AABB => overlap
+function aabbOverlapsPoly(a: Aabb, pts: { x: number; y: number }[], polyAabb: Aabb) {
+  if (!aabbOverlapsAabb(a, polyAabb)) return false;
+
+  const x0 = a.x,
+    y0 = a.y;
+  const x1 = a.x + a.w,
+    y1 = a.y + a.h;
+
+  // AABB corners + center
+  const cx = (x0 + x1) * 0.5;
+  const cy = (y0 + y1) * 0.5;
+
+  if (pointInPoly(x0, y0, pts)) return true;
+  if (pointInPoly(x1, y0, pts)) return true;
+  if (pointInPoly(x0, y1, pts)) return true;
+  if (pointInPoly(x1, y1, pts)) return true;
+  if (pointInPoly(cx, cy, pts)) return true;
+
+  // any vertex inside AABB
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    if (p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1) return true;
+  }
+
+  return false;
+}
 
 export async function createGame(vw: number, vh: number, opts?: CreateGameOpts): Promise<Game> {
   const cam: Cam = { x: 0, y: 0 };
@@ -115,7 +167,6 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     playWinSfx: () => play("uiConfirm", { volume: 0.65, minGapMs: 120 }),
     playDeathSfx: () => play("death", { volume: 0.7, minGapMs: 180 }),
     onWinBegin: () => {
-      // start win music + preload next level during the hold
       try {
         opts?.onWinMusicBegin?.();
       } catch {}
@@ -126,7 +177,7 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
         opts?.onWinMusicEnd?.();
       } catch {}
     },
-    onWinDone: () => runtime.nextLevel(), // nextLevel will now instant-swap if preloaded
+    onWinDone: () => runtime.nextLevel(),
     onDeathDone: () => runtime.loadLevel(runtime.levelIndex),
   });
 
@@ -155,19 +206,39 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
   }
 
   function anyEntityOnSpikes(world: TiledWorld, allEntities: Player[]) {
-    for (const e of allEntities) {
-      // IMPORTANT: hazards use FEET collider, not center collider
-      const collider = hazardCollider(e);
-      const reduced = {
-        x: collider.x + 2,
-        y: collider.y + 2,
-        w: collider.w - 4,
-        h: collider.h - 4,
-      };
-      if (aabbOverlapsTileLocalIndex(world, reduced, SPIKE_LOCAL_INDEX, ["tile", "collide"])) return true;
+  const spikeIdx = SPIKE_LOCAL_INDEXES;
+
+  // Make goslings a bit more forgiving than the player.
+  // (Bigger inset + slightly lifted feet check.)
+  const PAD_PLAYER = 2;
+  const PAD_BABY = 4;
+  const LIFT_PLAYER = 0;
+  const LIFT_BABY = 1;
+
+  for (const e of allEntities) {
+    const isBaby = e !== runtime.player;
+
+    const pad = isBaby ? PAD_BABY : PAD_PLAYER;
+    const lift = isBaby ? LIFT_BABY : LIFT_PLAYER;
+
+    // IMPORTANT: hazards use FEET collider, not center collider
+    const collider = hazardCollider(e);
+
+    // shrink + lift so babies need a more "committed" overlap to die
+    const reduced = {
+      x: collider.x + pad,
+      y: collider.y + pad - lift,
+      w: Math.max(1, collider.w - pad * 2),
+      h: Math.max(1, collider.h - pad * 2),
+    };
+
+    for (let i = 0; i < spikeIdx.length; i++) {
+      if (aabbOverlapsTileLocalIndex(world, reduced, spikeIdx[i], ["tile", "collide"])) return true;
     }
-    return false;
   }
+
+  return false;
+}
 
   function update(dt: number, keys: Keys) {
     const player = runtime.player;
@@ -243,13 +314,29 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
       return;
     }
 
-    // UI trigger
-    const onTrigger = aabbOverlapsTileLocalIndex(world, entityCollider(player), UI_TRIGGER_LOCAL_INDEX, [
-      "tile",
-      "collide",
-    ]);
-    if (onTrigger) ui.set("Round up the goslings! <-- / -->");
-    else ui.clear();
+    // --- UI triggers from Tiled object layer "ui"
+    // NOW: goslings can trigger dialogs too (any entity overlap keeps the message up)
+    {
+      let msg = "";
+      const triggers = world.map.ui;
+
+      // Check triggers in map order; first match wins (stable + predictable).
+      for (let i = 0; i < triggers.length && !msg; i++) {
+        const tr = triggers[i];
+
+        // Check any entity (player or gosling)
+        for (let j = 0; j < allEntities.length; j++) {
+          const a = entityCollider(allEntities[j]);
+          if (aabbOverlapsPoly(a, tr.pts, tr.aabb)) {
+            msg = tr.msg;
+            break;
+          }
+        }
+      }
+
+      if (msg) ui.set(msg);
+      else ui.clear();
+    }
 
     updateHud(dt);
 

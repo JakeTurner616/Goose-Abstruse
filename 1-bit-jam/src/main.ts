@@ -133,6 +133,28 @@ addEventListener(
   { passive: true }
 );
 
+// -----------------------------------------------------------------------------
+// Debug console API (rapid prototyping)
+// -----------------------------------------------------------------------------
+declare global {
+  interface Window {
+    dbg?: {
+      game: () => Game | null;
+
+      // level controls
+      info: () => { index: number; count: number };
+      level: (i: number) => void;
+      next: () => void;
+      prev: () => void;
+      reload: () => void;
+
+      // optional convenience
+      invert: () => void;
+      music: (on: boolean) => void;
+    };
+  }
+}
+
 (async () => {
   let game: Game | null = null;
   let gameReady = false;
@@ -147,6 +169,72 @@ addEventListener(
     .then((g) => {
       game = g;
       gameReady = true;
+
+      // expose debug API once game exists
+      window.dbg = {
+        game: () => game,
+
+        info: () => ({
+          index: game ? game.getLevelIndex() : -1,
+          count: game ? game.getLevelCount() : 0,
+        }),
+
+        level: (i: number) => {
+          if (!game) return;
+          // ensure we are in-game (not stuck in menu) by requesting start music + scene switch if needed
+          // (safe even if already in-game)
+          wantMusic = true;
+          tryStartMusic();
+          game.loadLevel(i | 0);
+          console.log("[dbg] loadLevel ->", game.getLevelIndex(), "/", game.getLevelCount());
+        },
+
+        next: () => {
+          if (!game) return;
+          wantMusic = true;
+          tryStartMusic();
+          game.nextLevel();
+          console.log("[dbg] nextLevel ->", game.getLevelIndex(), "/", game.getLevelCount());
+        },
+
+        prev: () => {
+          if (!game) return;
+          wantMusic = true;
+          tryStartMusic();
+          const idx = game.getLevelIndex() | 0;
+          const cnt = Math.max(1, game.getLevelCount() | 0);
+          game.loadLevel(((idx - 1 + cnt) % cnt) | 0);
+          console.log("[dbg] prevLevel ->", game.getLevelIndex(), "/", game.getLevelCount());
+        },
+
+        reload: () => {
+          if (!game) return;
+          wantMusic = true;
+          tryStartMusic();
+          game.loadLevel(game.getLevelIndex());
+          console.log("[dbg] reload ->", game.getLevelIndex(), "/", game.getLevelCount());
+        },
+
+        invert: () => {
+          if (!game) return;
+          game.toggleInvert();
+        },
+
+        music: (on: boolean) => {
+          wantMusic = !!on;
+          if (!wantMusic) {
+            music.stop({ fadeSec: 0.04 });
+            winMusic.stop({ fadeSec: 0.04 });
+          } else {
+            tryStartMusic();
+          }
+          console.log("[dbg] music:", wantMusic ? "on" : "off");
+        },
+      };
+
+      console.log(
+        "[dbg] ready: try dbg.info(), dbg.next(), dbg.prev(), dbg.level(n), dbg.reload()"
+      );
     })
     .catch(console.error);
 

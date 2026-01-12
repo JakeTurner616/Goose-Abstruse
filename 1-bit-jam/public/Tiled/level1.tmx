@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<map version="1.10" tiledversion="1.11.2" orientation="orthogonal" renderorder="right-down" width="71" height="38" tilewidth="8" tileheight="8" infinite="0" nextlayerid="5" nextobjectid="1">
+<map version="1.10" tiledversion="1.11.2" orientation="orthogonal" renderorder="right-down" width="71" height="38" tilewidth="8" tileheight="8" infinite="0" nextlayerid="7" nextobjectid="4">
  <tileset firstgid="1" source="sample-sheet.tsx"/>
  <layer id="1" name="tiles" width="71" height="38">
   <data encoding="csv">
@@ -127,6 +127,21 @@
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 </data>
  </layer>
+ <objectgroup id="5" name="ui">
+  <object id="1" x="464" y="200">
+   <properties>
+    <property name="msg" value="Round up the goslings!"/>
+   </properties>
+   <polygon points="0,0 0,96 24,96 24,0"/>
+  </object>
+  <object id="3" x="16" y="48">
+   <properties>
+    <property name="msg" value="Move with WASD or ARROW keys"/>
+   </properties>
+   <polygon points="0,0 0,64 120,64 120,0"/>
+  </object>
+ </objectgroup>
+ <objectgroup id="6" name="Object Layer 2"/>
  <layer id="4" name="waterfall" width="71" height="38">
   <data encoding="csv">
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
