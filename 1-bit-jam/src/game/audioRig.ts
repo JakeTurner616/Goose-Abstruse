@@ -11,13 +11,14 @@ export type PlayOpts = { volume?: number; detune?: number; minGapMs?: number };
 const SFX_PATHS: Record<string, string> = {
   jump: assetUrl("Sounds/jump.json"),
   death: assetUrl("Sounds/laserShoot.json"),
+  error: assetUrl("Sounds/blipSelect.json"),
 };
 
 export function createAudioRig(injected?: SoundSystem) {
-  const sfx: SoundSystem = injected ?? createSoundSystem({ volume: 0.15 });
+  const sfx: SoundSystem = injected ?? createSoundSystem({ volume: 0.35 });
   let bank: SoundBank | null = null;
 
-  // Load only jump + death from the bank. If this fails (missing files), we still work via presets.
+  // Load only jump + death + error from the bank. If this fails (missing files), we still work via presets.
   loadSoundBank(sfx, SFX_PATHS)
     .then((b) => (bank = b))
     .catch(() => (bank = null));
@@ -46,8 +47,8 @@ export function createAudioRig(injected?: SoundSystem) {
   function tryBankPlay(name: string, opts2?: PlayOpts): boolean {
     if (!bank) return false;
 
-    // Only ever attempt bank playback for the two external clips.
-    if (name !== "jump" && name !== "death") return false;
+    // Only ever attempt bank playback for the three external clips.
+    if (name !== "jump" && name !== "death" && name !== "error") return false;
 
     try {
       // Some bank implementations store definitions under defs; if missing, don't call play().

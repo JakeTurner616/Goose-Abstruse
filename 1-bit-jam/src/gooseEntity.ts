@@ -19,6 +19,10 @@ const snapBakeSize = (px: number) => (px >= 30 ? 32 : px >= 22 ? 24 : px >= 14 ?
 // Small threshold so we don't "walk" when vx got killed by collision but input is held.
 const MOVE_EPS = 0.75;
 
+// When a jump is attempted but there is basically no headroom, physics will
+// register hitCeil and the body won't move up. Use a small epsilon.
+const CEIL_BLOCK_EPS = 0.75;
+
 export async function createGooseEntity(opts?: {
   x?: number;
   y?: number;
@@ -65,6 +69,11 @@ export async function createGooseEntity(opts?: {
   let groundGrace = 0;
   let puppetSpeed = 0;
 
+  // NEW meaning:
+  // true only when a jump was ATTEMPTED (grounded/grace) but was immediately blocked by ceiling.
+  // (game.ts plays the "error" sfx when this is true)
+  let jumpFailedThisFrame = false;
+
   const dbg: {
     id: string;
     controllable: boolean;
@@ -80,6 +89,7 @@ export async function createGooseEntity(opts?: {
     y: number;
     vx: number;
     vy: number;
+    jumpFail: boolean;
   } = {
     id: ((Math.random() * 1e9) | 0).toString(36),
     controllable,
@@ -95,6 +105,7 @@ export async function createGooseEntity(opts?: {
     y: body.y,
     vx: body.vx,
     vy: body.vy,
+    jumpFail: false,
   };
 
   const log = (kind: string, extra?: string) => {
@@ -132,12 +143,16 @@ export async function createGooseEntity(opts?: {
     dbg.y = body.y;
     dbg.vx = body.vx;
     dbg.vy = body.vy;
+    dbg.jumpFail = !!jumpFailedThisFrame;
   };
 
   function update(dt: number, keys: Keys, solid: SolidTileQuery, world: WorldInfo) {
     const k = controllable ? keys : (NO_KEYS as Keys);
 
-    // --- ground grace (coyote) is evaluated BEFORE we consume buffered jump
+    // reset per-frame flag
+    jumpFailedThisFrame = false;
+
+    // --- ground grace (coyote) evaluated BEFORE consuming buffered jump
     groundGrace = physState.grounded ? GROUND_GRACE_T : Math.max(0, groundGrace - dt);
     const canJumpNow = physState.grounded || groundGrace > 0;
 
@@ -145,6 +160,7 @@ export async function createGooseEntity(opts?: {
     const jp = k.up || k.a;
     if (jp && !jumpLatch) (jumpBuf = JUMP_BUF_T), (jumpLatch = true);
     if (!jp) jumpLatch = false;
+
     if (jumpBuf > 0) jumpBuf = Math.max(0, jumpBuf - dt);
 
     const ax = (k.left ? -1 : 0) + (k.right ? 1 : 0);
@@ -157,12 +173,15 @@ export async function createGooseEntity(opts?: {
       body.vx = Math.max(0, Math.abs(body.vx) - RUN_DECEL * dt) * s;
     }
 
-    // --- consume buffered jump ONLY if grounded/grace (no double-jumps)
+    let attemptedJump = false;
+
+    // consume buffered jump ONLY if grounded/grace
     if (jumpBuf > 0 && canJumpNow) {
+      attemptedJump = true;
       jumpBuf = 0;
       groundGrace = 0; // spend grace immediately so you can't "chain" via buffer timing
       body.vy = -JUMP_V;
-      log("JUMP!");
+      log("JUMP_ATTEMPT");
     }
 
     // physics then snap + (rare) corner-unstick
@@ -170,6 +189,14 @@ export async function createGooseEntity(opts?: {
     stepTileAabbPhysics(body, physState, dt, solid, world, physTune);
     snapBody(body);
     handleCornerCatchUnstick(dt, body, physState, solid, world, unstick, preY);
+
+    // If we tried to jump, but we immediately bonked the ceiling and basically didn't move up,
+    // treat it as a blocked jump (play "error" from game.ts). This will NOT trigger for
+    // midair jump spam / double-jump prevention.
+    if (attemptedJump && physState.hitCeil && body.y >= preY - CEIL_BLOCK_EPS) {
+      jumpFailedThisFrame = true;
+      if (DEBUG) log("JUMP_BLOCKED_CEIL");
+    }
 
     // refresh grace if we landed this frame (do NOT decay twice)
     if (physState.grounded) groundGrace = GROUND_GRACE_T;
@@ -206,6 +233,9 @@ export async function createGooseEntity(opts?: {
     solid: SolidTileQuery,
     world: WorldInfo
   ) {
+    // puppets never drive error sfx; only controllable player does
+    jumpFailedThisFrame = false;
+
     // grace (coyote) for puppet
     groundGrace = physState.grounded ? GROUND_GRACE_T : Math.max(0, groundGrace - dt);
     const canJumpNow = physState.grounded || groundGrace > 0;
@@ -327,6 +357,11 @@ export async function createGooseEntity(opts?: {
     },
     set grounded(v: boolean) {
       physState.grounded = v;
+    },
+
+    // Read-only flag: jump was attempted but immediately blocked by ceiling.
+    get _jumpFailed() {
+      return !!jumpFailedThisFrame;
     },
 
     update,

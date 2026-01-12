@@ -167,37 +167,37 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
 
   // world/entities + loading
   const runtime = createLevelRuntime({
-  levels: opts?.levels,
-  startLevel: opts?.startLevel,
+    levels: opts?.levels,
+    startLevel: opts?.startLevel,
 
-  // IMPORTANT: never pass a raw "/Key/" or "./Key/" here.
-  // This must resolve under Vite's BASE_URL on itch.
-  keyAtlasPath: assetUrl("Key/"),
+    // IMPORTANT: never pass a raw "/Key/" or "./Key/" here.
+    // This must resolve under Vite's BASE_URL on itch.
+    keyAtlasPath: assetUrl("Key/"),
 
-  setUiMessage: (m) => ui.set(m),
-  onWorldApplied: (w) => camFocus.setWorld(w),
-  onEntitiesPlaced: (player, babies) => {
-    camFocus.setTargets(player, babies);
-    camFocus.reset();
-    camFocus.update(0);
-  },
-  onResetForNewLevel: () => {
-    ui.clear();
-    sequences.resetAll();
-    camFocus.reset();
+    setUiMessage: (m) => ui.set(m),
+    onWorldApplied: (w) => camFocus.setWorld(w),
+    onEntitiesPlaced: (player, babies) => {
+      camFocus.setTargets(player, babies);
+      camFocus.reset();
+      camFocus.update(0);
+    },
+    onResetForNewLevel: () => {
+      ui.clear();
+      sequences.resetAll();
+      camFocus.reset();
 
-    // tell main.ts which normal track should be active for the incoming level
-    const idx = pendingLevelIndex >= 0 ? pendingLevelIndex : (runtime.levelIndex | 0);
-    emitLevelMusic(idx);
+      // tell main.ts which normal track should be active for the incoming level
+      const idx = pendingLevelIndex >= 0 ? pendingLevelIndex : (runtime.levelIndex | 0);
+      emitLevelMusic(idx);
 
-    // IMPORTANT: don't let a stale pending index survive into later transitions
-    clearPendingLevelIndex();
+      // IMPORTANT: don't let a stale pending index survive into later transitions
+      clearPendingLevelIndex();
 
-    try {
-      opts?.onWinMusicEnd?.();
-    } catch {}
-  },
-});
+      try {
+        opts?.onWinMusicEnd?.();
+      } catch {}
+    },
+  });
 
   // ---- wrappers that MUST be used for transitions (so music can track correctly)
   function doLoadLevel(i: number) {
@@ -364,6 +364,12 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
 
     const pvy0 = player.vy;
     player.update(dt, keys, runtime.isSolidTile, worldInfo);
+
+    // NEW: if the player's buffered jump expired without becoming valid, play error
+    if ((player as any)._jumpFailed) {
+      play("error", { volume: 0.5, detune: -120, minGapMs: 90 });
+    }
+
     const masterJump = pvy0 >= 0 && player.vy < 0;
 
     if (masterJump) play("jump", { volume: 0.55, minGapMs: 40 });
