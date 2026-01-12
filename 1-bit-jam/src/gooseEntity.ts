@@ -61,7 +61,7 @@ export async function createGooseEntity(opts?: {
 
   let jumpBuf = 0,
     jumpLatch = false;
-  let puppetJumpLatch = true;
+  let puppetJumpLatch = false; // only blocks repeat while held; actual jump eligibility is grounded/grace
   let groundGrace = 0;
   let puppetSpeed = 0;
 
@@ -110,12 +110,7 @@ export async function createGooseEntity(opts?: {
     );
   };
 
-  const animCtrl = createAnimCtrl(
-    "idle",
-    animLen,
-    animRate,
-    (next) => log("ANIM->", next)
-  );
+  const animCtrl = createAnimCtrl("idle", animLen, animRate, (next) => log("ANIM->", next));
 
   const setState = (next: MoveState) => {
     if (state === next) return;
@@ -139,15 +134,14 @@ export async function createGooseEntity(opts?: {
     dbg.vy = body.vy;
   };
 
-  const groundedStable = (dt: number) => {
-    groundGrace = physState.grounded ? GROUND_GRACE_T : Math.max(0, groundGrace - dt);
-    return physState.grounded || groundGrace > 0;
-  };
-
   function update(dt: number, keys: Keys, solid: SolidTileQuery, world: WorldInfo) {
     const k = controllable ? keys : (NO_KEYS as Keys);
 
-    // jump buffer
+    // --- ground grace (coyote) is evaluated BEFORE we consume buffered jump
+    groundGrace = physState.grounded ? GROUND_GRACE_T : Math.max(0, groundGrace - dt);
+    const canJumpNow = physState.grounded || groundGrace > 0;
+
+    // jump buffer (press)
     const jp = k.up || k.a;
     if (jp && !jumpLatch) (jumpBuf = JUMP_BUF_T), (jumpLatch = true);
     if (!jp) jumpLatch = false;
@@ -163,8 +157,10 @@ export async function createGooseEntity(opts?: {
       body.vx = Math.max(0, Math.abs(body.vx) - RUN_DECEL * dt) * s;
     }
 
-    if (jumpBuf > 0) {
+    // --- consume buffered jump ONLY if grounded/grace (no double-jumps)
+    if (jumpBuf > 0 && canJumpNow) {
       jumpBuf = 0;
+      groundGrace = 0; // spend grace immediately so you can't "chain" via buffer timing
       body.vy = -JUMP_V;
       log("JUMP!");
     }
@@ -175,7 +171,9 @@ export async function createGooseEntity(opts?: {
     snapBody(body);
     handleCornerCatchUnstick(dt, body, physState, solid, world, unstick, preY);
 
-    const onGround = groundedStable(dt);
+    // refresh grace if we landed this frame (do NOT decay twice)
+    if (physState.grounded) groundGrace = GROUND_GRACE_T;
+    const onGround = physState.grounded || groundGrace > 0;
 
     const sideHit = !!(physState.hitLeft || physState.hitRight);
     const moving = Math.abs(body.vx) > MOVE_EPS;
@@ -208,6 +206,10 @@ export async function createGooseEntity(opts?: {
     solid: SolidTileQuery,
     world: WorldInfo
   ) {
+    // grace (coyote) for puppet
+    groundGrace = physState.grounded ? GROUND_GRACE_T : Math.max(0, groundGrace - dt);
+    const canJumpNow = physState.grounded || groundGrace > 0;
+
     const dir: -1 | 0 | 1 = masterDx < 0 ? -1 : masterDx > 0 ? 1 : 0;
 
     if (dir !== 0 && DEBUG) log("PUPPET_INPUT", `masterDx: ${masterDx} | dir: ${dir}`);
@@ -217,12 +219,13 @@ export async function createGooseEntity(opts?: {
 
     const accel = target > puppetSpeed ? RUN_ACCEL : RUN_DECEL;
     const dv = accel * dt;
-    puppetSpeed =
-      puppetSpeed < target ? Math.min(target, puppetSpeed + dv) : Math.max(target, puppetSpeed - dv);
+    puppetSpeed = puppetSpeed < target ? Math.min(target, puppetSpeed + dv) : Math.max(target, puppetSpeed - dv);
 
     body.vx = dir * puppetSpeed;
 
-    if (masterJump && !puppetJumpLatch) {
+    // --- no midair repeat: require grounded/grace + edge latch
+    if (masterJump && !puppetJumpLatch && canJumpNow) {
+      groundGrace = 0;
       body.vy = Math.min(body.vy, -JUMP_V);
       puppetJumpLatch = true;
     }
@@ -243,7 +246,7 @@ export async function createGooseEntity(opts?: {
         }`
       );
 
-    groundGrace = physState.grounded ? GROUND_GRACE_T : Math.max(0, groundGrace - dt);
+    if (physState.grounded) groundGrace = GROUND_GRACE_T;
     const onGround = physState.grounded || groundGrace > 0;
 
     if (physState.hitLeft || physState.hitRight) {

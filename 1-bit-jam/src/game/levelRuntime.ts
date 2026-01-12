@@ -76,12 +76,14 @@ type PreparedLevel = {
 };
 
 export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
-  const LEVELS = (opts.levels?.length ? opts.levels : ["./Tiled/level1.tmx", "./Tiled/level1 copy.tmx"]).slice();
+  const LEVELS = (
+    opts.levels?.length ? opts.levels : ["./Tiled/level1.tmx", "./Tiled/level2.tmx", "./Tiled/level3.tmx"]
+  ).slice();
+
   let levelIndex = clamp(opts.startLevel ?? 0, 0, Math.max(0, LEVELS.length - 1)) | 0;
 
   // "visible" loading (used for boot/death/manual loads)
   let loadingLevel = false;
-
 
   let world: TiledWorld | null = null;
   let player!: Player;
@@ -97,6 +99,9 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
   let prepared: PreparedLevel | null = null;
   let preparingIdx: number | null = null;
   let preparingPromise: Promise<void> | null = null;
+
+  // guards against stale async loads completing late and overwriting newer loads
+  let loadToken = 0;
 
   function isSolidTile(tx: number, ty: number) {
     if (!world) return false;
@@ -292,14 +297,36 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
       return;
     }
 
-    if (loadingLevel) return;
+    // Start a new visible async load (cancel/ignore any prior one)
+    const myToken = ++loadToken;
 
     loadingLevel = true;
     opts.setUiMessage("LOADING...");
 
+    // If a preload was in-flight, we don't *need* to cancel it, but we should
+    // prevent it from overwriting `prepared` for a now-irrelevant idx.
+    preparingIdx = null;
 
+    (async () => {
+      try {
+        const url = LEVELS[idx];
+        const nextWorld = await loadTiled(url);
 
-    
+        // stale load? bail without touching state
+        if (myToken !== loadToken) return;
+
+        await applyLoadedWorld(nextWorld);
+      } catch (err) {
+        if (myToken !== loadToken) return;
+        console.error(err);
+        opts.setUiMessage("LOAD FAILED");
+      } finally {
+        if (myToken !== loadToken) return;
+        loadingLevel = false;
+        // UI gets cleared by onResetForNewLevel on success;
+        // on failure, leave the message up.
+      }
+    })();
   }
 
   function nextLevel() {
@@ -307,20 +334,18 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
     loadLevel(((levelIndex + 1) % LEVELS.length) | 0);
   }
 
-async function init() {
-  const [p, firstWorld, ka] = await Promise.all([
-    createPlayer({ x: 24, y: 24 }),
-    loadTiled(LEVELS[levelIndex]),
-    loadKeyAtlas(
-      assetUrl((opts.keyAtlasPath ?? "Key/").replace(/^\/+/, ""))
-    ).catch(() => null),
-  ]);
+  async function init() {
+    const [p, firstWorld, ka] = await Promise.all([
+      createPlayer({ x: 24, y: 24 }),
+      loadTiled(LEVELS[levelIndex]),
+      loadKeyAtlas(assetUrl((opts.keyAtlasPath ?? "Key/").replace(/^\/+/, ""))).catch(() => null),
+    ]);
 
-  player = p;
-  keyAtlas = ka;
+    player = p;
+    keyAtlas = ka;
 
-  await applyLoadedWorld(firstWorld);
-}
+    await applyLoadedWorld(firstWorld);
+  }
 
   function incKeysCollected() {
     keysCollected = (keysCollected + 1) | 0;
