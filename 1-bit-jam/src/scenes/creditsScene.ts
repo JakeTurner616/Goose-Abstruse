@@ -41,6 +41,7 @@ function createPixText(): PixText {
     "'": [0b010, 0b010, 0b000, 0b000, 0b000],
     "(": [0b001, 0b010, 0b010, 0b010, 0b001],
     ")": [0b100, 0b010, 0b010, 0b010, 0b100],
+    "_": [0b000, 0b000, 0b000, 0b000, 0b111],
 
     A: [0b010, 0b101, 0b111, 0b101, 0b101],
     B: [0b110, 0b101, 0b110, 0b101, 0b110],
@@ -186,7 +187,7 @@ function creditsSlides(): Slide[] {
     },
     {
       title: "MUSIC",
-      lines: ["TIX0 - MOD ARCHIVE", "2TRASH2TRACK - MOD ARCHIVE", "KC-SYNTHLESS2014EDIT - MOD ARCHIVE"],
+      lines: ["TIX0 - NEPTUNIUM237", "2_TRASH_2_TRACK - NEPTUNIUM237", "KC-SYNTHLESS2014EDIT - Katie Cadet"],
     },
     {
       title: "ART",
