@@ -35,6 +35,9 @@ export type LevelRuntime = {
   loadLevel(i: number): void;
   nextLevel(): void;
 
+  // NEW: restart current level instantly (no LOADING flash)
+  restartLevel(): void;
+
   // NEW: warm up the next level during win hold so the swap is instant
   preloadNextLevel(): void;
 
@@ -77,7 +80,17 @@ type PreparedLevel = {
 
 export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
   const LEVELS = (
-    opts.levels?.length ? opts.levels : ["./Tiled/level1.tmx", "./Tiled/level2.tmx", "./Tiled/level3.tmx", "./Tiled/level4.tmx", "./Tiled/level5.tmx", "./Tiled/level6.tmx", "./Tiled/level7.tmx"]
+    opts.levels?.length
+      ? opts.levels
+      : [
+          "./Tiled/level1.tmx",
+          "./Tiled/level2.tmx",
+          "./Tiled/level3.tmx",
+          "./Tiled/level4.tmx",
+          "./Tiled/level5.tmx",
+          "./Tiled/level6.tmx",
+          "./Tiled/level7.tmx",
+        ]
   ).slice();
 
   let levelIndex = clamp(opts.startLevel ?? 0, 0, Math.max(0, LEVELS.length - 1)) | 0;
@@ -94,6 +107,9 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
 
   let keysTotal = 0;
   let keysCollected = 0;
+
+  // Cache spawn points for the CURRENT applied world so restart is instant.
+  let curSpawns: SpawnPoint[] | null = null;
 
   // "hidden" prepared next-level state (built during win hold)
   let prepared: PreparedLevel | null = null;
@@ -129,6 +145,37 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
 
     gooselings.push(...made);
     for (const b of gooselings) snapToPixel(b);
+  }
+
+  function ensureAndResetGooselings(points: SpawnPoint[]) {
+    // Fast path: reuse existing entities so restart is instant.
+    const babies = points.filter((p) => p.kind === "gooseling");
+    const n = babies.length | 0;
+
+    // If counts mismatch, fall back to async rebuild (still no LOADING message).
+    if (gooselings.length !== n) {
+      loadingLevel = true;
+      (async () => {
+        try {
+          await spawnGooselings(points);
+        } finally {
+          loadingLevel = false;
+          // After rebuild, we should refresh camera targets.
+          opts.onEntitiesPlaced(player, gooselings);
+        }
+      })();
+      return;
+    }
+
+    for (let i = 0; i < n; i++) {
+      const p = babies[i];
+      const b = gooselings[i];
+      b.x = p.x;
+      b.y = p.y;
+      b.vx = 0;
+      b.vy = 0;
+      snapToPixel(b);
+    }
   }
 
   function buildKeyEntity(nextWorld: TiledWorld, points: SpawnPoint[]) {
@@ -188,6 +235,7 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
 
   function applyPrepared(p: PreparedLevel) {
     world = p.world;
+    curSpawns = scanSpawnPoints(p.world);
     opts.onWorldApplied(p.world);
 
     // counters
@@ -215,9 +263,10 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
 
   async function applyLoadedWorld(nextWorld: TiledWorld) {
     world = nextWorld;
+    curSpawns = scanSpawnPoints(nextWorld);
     opts.onWorldApplied(nextWorld);
 
-    const sp = scanSpawnPoints(nextWorld);
+    const sp = curSpawns;
 
     keysTotal = sp.filter((s) => s.kind === "key").length | 0;
     keysCollected = 0;
@@ -247,6 +296,40 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
     opts.onEntitiesPlaced(player, gooselings);
   }
 
+  function restartLevel() {
+    if (!world) return;
+
+    const sp = curSpawns ?? (curSpawns = scanSpawnPoints(world));
+
+    // counters (restart should reset collection)
+    keysTotal = sp.filter((s) => s.kind === "key").length | 0;
+    keysCollected = 0;
+
+    // player start
+    let startX = 24;
+    let startY = 0;
+    const goose = sp.find((s) => s.kind === "goose");
+    if (goose) {
+      startX = goose.x;
+      startY = goose.y;
+    }
+
+    player.x = startX;
+    player.y = startY;
+    player.vx = 0;
+    player.vy = 0;
+    snapToPixel(player);
+
+    // babies: reuse entities when possible (instant)
+    ensureAndResetGooselings(sp);
+
+    // key: respawn at first key spawn
+    key = buildKeyEntity(world, sp);
+
+    opts.onResetForNewLevel();
+    opts.onEntitiesPlaced(player, gooselings);
+  }
+
   function clearPrepared() {
     prepared = null;
     preparingIdx = null;
@@ -259,20 +342,15 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
 
     const nextIdx = ((levelIndex + 1) % LEVELS.length) | 0;
 
-    // already prepared for that next level
     if (prepared && prepared.idx === nextIdx) return;
-
-    // already preparing that next level
     if (preparingIdx === nextIdx && preparingPromise) return;
 
     preparingIdx = nextIdx;
     preparingPromise = (async () => {
       try {
         const p = await buildPrepared(nextIdx);
-        // only keep if still relevant
         if (preparingIdx === nextIdx) prepared = p;
       } catch {
-        // if preload fails, just don't block the win transition; we'll fall back to normal load
         if (preparingIdx === nextIdx) prepared = null;
       } finally {
         if (preparingIdx === nextIdx) {
@@ -297,14 +375,11 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
       return;
     }
 
-    // Start a new visible async load (cancel/ignore any prior one)
     const myToken = ++loadToken;
 
     loadingLevel = true;
     opts.setUiMessage("LOADING...");
 
-    // If a preload was in-flight, we don't *need* to cancel it, but we should
-    // prevent it from overwriting `prepared` for a now-irrelevant idx.
     preparingIdx = null;
 
     (async () => {
@@ -312,7 +387,6 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
         const url = LEVELS[idx];
         const nextWorld = await loadTiled(url);
 
-        // stale load? bail without touching state
         if (myToken !== loadToken) return;
 
         await applyLoadedWorld(nextWorld);
@@ -323,8 +397,6 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
       } finally {
         if (myToken !== loadToken) return;
         loadingLevel = false;
-        // UI gets cleared by onResetForNewLevel on success;
-        // on failure, leave the message up.
       }
     })();
   }
@@ -395,6 +467,7 @@ export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
 
     loadLevel,
     nextLevel,
+    restartLevel,
     preloadNextLevel,
 
     init,

@@ -134,6 +134,9 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
   let t = 0;
   let collisionSfxCooldown = 0;
 
+  // NEW: restart latch (prevents restarting every frame while held)
+  let restartLatch = false;
+
   // camera focus controller (X / keys.b)
   const camFocus = createCameraFocusController(cam, {
     vw,
@@ -313,9 +316,27 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
     const player = runtime.player;
 
     // unlock audio on any gameplay input
-    if (keys.a || keys.b || keys.start || keys.select || keys.left || keys.right || keys.up || keys.down) {
+    if (
+      keys.a ||
+      keys.b ||
+      keys.start ||
+      keys.select ||
+      keys.left ||
+      keys.right ||
+      keys.up ||
+      keys.down ||
+      keys.r
+    ) {
       sfx.userGesture();
     }
+
+    // NEW: press R to restart current level (edge-triggered)
+    if (keys.r && !restartLatch) {
+  restartLatch = true;
+  runtime.restartLevel();
+  return;
+}
+if (!keys.r) restartLatch = false;
 
     if (dt > 0) t += Math.min(dt, 0.05);
 

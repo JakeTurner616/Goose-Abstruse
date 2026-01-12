@@ -1,8 +1,21 @@
 // src/playerTypes.ts
 export type Keys = {
-  left: boolean; right: boolean; up: boolean; down: boolean;
-  a: boolean; b: boolean; start: boolean; select: boolean;
+  left: boolean;
+  right: boolean;
+  up: boolean;
+  down: boolean;
+
+  a: boolean;
+  b: boolean;
+
+  start: boolean;
+  select: boolean;
+
+  // NEW
+  r: boolean;
 };
+
+
 
 export type SolidTileQuery = (tx: number, ty: number) => boolean;
 
@@ -41,6 +54,16 @@ export type Player = {
 };
 
 export const NO_KEYS: Keys = {
-  left: false, right: false, up: false, down: false,
-  a: false, b: false, start: false, select: false,
+  left: false,
+  right: false,
+  up: false,
+  down: false,
+
+  a: false,
+  b: false,
+
+  start: false,
+  select: false,
+
+  r: false,
 };
