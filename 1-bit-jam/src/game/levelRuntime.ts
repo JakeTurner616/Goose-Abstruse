@@ -77,7 +77,7 @@ type PreparedLevel = {
 
 export function createLevelRuntime(opts: CreateLevelRuntimeOpts): LevelRuntime {
   const LEVELS = (
-    opts.levels?.length ? opts.levels : ["./Tiled/level1.tmx", "./Tiled/level2.tmx", "./Tiled/level3.tmx"]
+    opts.levels?.length ? opts.levels : ["./Tiled/level1.tmx", "./Tiled/level2.tmx", "./Tiled/level3.tmx", "./Tiled/level4.tmx", "./Tiled/level5.tmx", "./Tiled/level6.tmx", "./Tiled/level7.tmx"]
   ).slice();
 
   let levelIndex = clamp(opts.startLevel ?? 0, 0, Math.max(0, LEVELS.length - 1)) | 0;
