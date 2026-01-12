@@ -35,6 +35,8 @@ const FONT3X5: Record<string, Uint8Array> = {
   "/": new Uint8Array([0b001, 0b001, 0b010, 0b100, 0b100]),
   "<": new Uint8Array([0b001, 0b010, 0b100, 0b010, 0b001]),
   ">": new Uint8Array([0b100, 0b010, 0b001, 0b010, 0b100]),
+  ":": new Uint8Array([0b000, 0b010, 0b000, 0b010, 0b000]),
+  ")": new Uint8Array([0b100, 0b010, 0b010, 0b010, 0b100]),
 
   // basic uppercase letters (3x5 compromises but readable)
   "A": new Uint8Array([0b010, 0b101, 0b111, 0b101, 0b101]),
