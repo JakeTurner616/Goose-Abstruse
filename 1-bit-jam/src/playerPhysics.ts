@@ -126,7 +126,7 @@ function tryStepUp(a: AABB, nx: number, solid: SolidTileQuery, world: WorldInfo,
 // - NO grounded fiddling
 // - smaller search radius (keeps motion smooth)
 // -----------------------------------------------------------------------------
-export function unstuckTileAabb(a: AABB, st: PhysicsState, solid: SolidTileQuery, world: WorldInfo) {
+export function unstuckTileAabb(a: AABB, _st: PhysicsState, solid: SolidTileQuery, world: WorldInfo) {
   if (!hits(a.x, a.y, a.w, a.h, solid, world)) return false;
 
   const ox = a.x;
