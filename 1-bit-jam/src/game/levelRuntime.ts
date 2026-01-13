@@ -35,10 +35,10 @@ export type LevelRuntime = {
   loadLevel(i: number): void;
   nextLevel(): void;
 
-  // NEW: restart current level instantly (no LOADING flash)
+  // restart current level instantly (no LOADING flash)
   restartLevel(): void;
 
-  // NEW: warm up the next level during win hold so the swap is instant
+  // warm up the next level during win hold so the swap is instant
   preloadNextLevel(): void;
 
   // called once at boot

@@ -21,7 +21,7 @@ export type TiledMap = {
   collide: Uint32Array;
   spawns: Uint32Array;
 
-  // NEW: ui polygon triggers
+  // ui polygon triggers
   ui: UiTrigger[];
 };
 
@@ -386,7 +386,7 @@ const tilecount = attrInt(tsxRoot, "tilecount");
   const collide = layers["collide"] ?? new Uint32Array(w * h);
   const spawns = layers["spawns"] ?? new Uint32Array(w * h);
 
-  // --- NEW: UI triggers from object layer
+  // UI triggers from object layer
   const ui = parseUiObjectLayer(tmx);
 
   return {

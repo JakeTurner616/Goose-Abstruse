@@ -37,7 +37,10 @@ function hits(x: number, y: number, w: number, h: number, solid: SolidTileQuery,
   return false;
 }
 
-
+// expose this for collision-safe snapping (avoids snapBody rounding into walls)
+export function aabbHitsTiles(a: { x: number; y: number; w: number; h: number }, solid: SolidTileQuery, world: WorldInfo) {
+  return hits(a.x, a.y, a.w, a.h, solid, world);
+}
 
 function rowSolid(ty: number, x: number, w: number, solid: SolidTileQuery, world: WorldInfo) {
   const tw = world.tw | 0;
@@ -48,14 +51,11 @@ function rowSolid(ty: number, x: number, w: number, solid: SolidTileQuery, world
 }
 
 // Binary-search sweep to the furthest non-colliding position along X.
-// Note: caller may apply a small "nudge" away from contact after this.
 function sweepXToContact(a: AABB, nx: number, solid: SolidTileQuery, world: WorldInfo, iters = 10) {
   const start = a.x;
   if (nx === start) return start;
 
-  // If we are already colliding, don't attempt to solve here.
   if (hits(start, a.y, a.w, a.h, solid, world)) return start;
-
   if (!hits(nx, a.y, a.w, a.h, solid, world)) return nx;
 
   let free = start;
@@ -89,7 +89,7 @@ function sweepYToContact(a: AABB, ny: number, solid: SolidTileQuery, world: Worl
   return free;
 }
 
-// FIXED: Step-up must be "onto a ledge", not "into any empty pocket".
+// Step-up must be "onto a ledge", not "into any empty pocket".
 function tryStepUp(a: AABB, nx: number, solid: SolidTileQuery, world: WorldInfo, tuning: PhysicsTuning) {
   const maxUp = tuning.stepUp | 0;
   if (maxUp <= 0) return false;
@@ -119,6 +119,56 @@ function tryStepUp(a: AABB, nx: number, solid: SolidTileQuery, world: WorldInfo,
   return false;
 }
 
+// -----------------------------------------------------------------------------
+// Emergency depenetration (true “rare rescue”).
+// Key changes vs previous:
+// - NO velocity killing (prevents wall-fall slowdown)
+// - NO grounded fiddling
+// - smaller search radius (keeps motion smooth)
+// -----------------------------------------------------------------------------
+export function unstuckTileAabb(a: AABB, st: PhysicsState, solid: SolidTileQuery, world: WorldInfo) {
+  if (!hits(a.x, a.y, a.w, a.h, solid, world)) return false;
+
+  const ox = a.x;
+  const oy = a.y;
+
+  // Tight radius: if we're deeper than this, something else is wrong (spawn / map).
+  const MAX_R = 4;
+
+  // Prefer least-surprising axis moves. Up first (common snap/floor cases),
+  // but DON'T force it if it would still collide.
+  for (let r = 1; r <= MAX_R; r++) {
+    // axis
+    const cand = [
+      [0, -r],
+      [-r, 0],
+      [r, 0],
+      [0, r],
+      // diagonals
+      [-r, -r],
+      [r, -r],
+      [-r, r],
+      [r, r],
+    ] as const;
+
+    for (let i = 0; i < cand.length; i++) {
+      const dx = cand[i][0];
+      const dy = cand[i][1];
+
+      const nx = clamp(ox + dx, 0, world.w - a.w);
+      const ny = clamp(oy + dy, 0, world.h - a.h);
+
+      if (!hits(nx, ny, a.w, a.h, solid, world)) {
+        a.x = nx;
+        a.y = ny;
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 /** Kinematic move (no gravity). */
 export function moveTileAabbKinematic(
   a: AABB,
@@ -138,7 +188,6 @@ export function moveTileAabbKinematic(
   const NUDGE = 1e-4;
 
   for (let i = 0; i < steps; i++) {
-    // X
     if (sdx) {
       const nx = a.x + sdx;
       if (!hits(nx, a.y, a.w, a.h, solid, world)) a.x = nx;
@@ -151,7 +200,6 @@ export function moveTileAabbKinematic(
       }
     }
 
-    // Y
     if (sdy) {
       const ny = a.y + sdy;
       if (!hits(a.x, ny, a.w, a.h, solid, world)) a.y = ny;
@@ -164,7 +212,6 @@ export function moveTileAabbKinematic(
       }
     }
 
-    // snap-down glue
     if (!st.grounded && sdy >= 0 && (tuning.snapDown | 0) > 0) {
       const maxDown = tuning.snapDown | 0;
       for (let d = 1; d <= maxDown; d++) {
@@ -180,6 +227,9 @@ export function moveTileAabbKinematic(
     a.y = clamp(a.y, 0, world.h - a.h);
   }
 
+  // only rescue if truly inside (doesn't change velocities)
+  unstuckTileAabb(a, st, solid, world);
+
   if (!st.grounded) st.grounded = hits(a.x, a.y + 1, a.w, a.h, solid, world);
 }
 
@@ -194,6 +244,9 @@ export function stepTileAabbPhysics(
 ) {
   resetState(st);
 
+  // If we start in-solid, rescue (no velocity edits).
+  unstuckTileAabb(a, st, solid, world);
+
   a.vy = Math.min(tuning.fallMax, a.vy + tuning.grav * dt);
 
   const steps = clamp(
@@ -206,7 +259,6 @@ export function stepTileAabbPhysics(
   const NUDGE = 1e-4;
 
   for (let i = 0; i < steps; i++) {
-    // X
     const nx = a.x + a.vx * sdt;
 
     if (!hits(nx, a.y, a.w, a.h, solid, world)) {
@@ -217,7 +269,6 @@ export function stepTileAabbPhysics(
       if (!(dir && tryStepUp(a, nx, solid, world, tuning))) {
         const snapped = sweepXToContact(a, nx, solid, world);
 
-        // Nudge away so later pixel-snaps can't push us into the wall.
         if (dir > 0) {
           a.x = snapped - NUDGE;
           st.hitRight = true;
@@ -232,7 +283,6 @@ export function stepTileAabbPhysics(
       }
     }
 
-    // Y
     const ny = a.y + a.vy * sdt;
 
     if (!hits(a.x, ny, a.w, a.h, solid, world)) {
@@ -254,7 +304,6 @@ export function stepTileAabbPhysics(
       a.vy = 0;
     }
 
-    // snap-down glue (keep kill-vy)
     if (!st.grounded && a.vy >= 0 && (tuning.snapDown | 0) > 0) {
       const maxDown = tuning.snapDown | 0;
       for (let d = 1; d <= maxDown; d++) {
@@ -270,6 +319,9 @@ export function stepTileAabbPhysics(
     a.x = clamp(a.x, 0, world.w - a.w);
     a.y = clamp(a.y, 0, world.h - a.h);
   }
+
+  // only rescue if truly inside; does not change velocities
+  unstuckTileAabb(a, st, solid, world);
 
   if (!st.grounded) st.grounded = hits(a.x, a.y + 1, a.w, a.h, solid, world);
 }

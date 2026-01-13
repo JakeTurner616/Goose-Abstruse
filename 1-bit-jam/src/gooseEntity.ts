@@ -1,5 +1,12 @@
 // src/gooseEntity.ts
-import { type AABB, type PhysicsState, defaultPhysicsTuning, stepTileAabbPhysics } from "./playerPhysics";
+import {
+  type AABB,
+  type PhysicsState,
+  defaultPhysicsTuning,
+  stepTileAabbPhysics,
+  unstuckTileAabb,
+  aabbHitsTiles,
+} from "./playerPhysics";
 import type { Keys, Player, SolidTileQuery, WorldInfo } from "./playerTypes";
 import { NO_KEYS } from "./playerTypes";
 import { getBakedForSize, type AnimName } from "./spriteBake";
@@ -16,11 +23,7 @@ const DEBUG = true;
 
 const snapBakeSize = (px: number) => (px >= 30 ? 32 : px >= 22 ? 24 : px >= 14 ? 16 : 12);
 
-// Small threshold so we don't "walk" when vx got killed by collision but input is held.
 const MOVE_EPS = 0.75;
-
-// When a jump is attempted but there is basically no headroom, physics will
-// register hitCeil and the body won't move up. Use a small epsilon.
 const CEIL_BLOCK_EPS = 0.75;
 
 export async function createGooseEntity(opts?: {
@@ -65,13 +68,10 @@ export async function createGooseEntity(opts?: {
 
   let jumpBuf = 0,
     jumpLatch = false;
-  let puppetJumpLatch = false; // only blocks repeat while held; actual jump eligibility is grounded/grace
+  let puppetJumpLatch = false;
   let groundGrace = 0;
   let puppetSpeed = 0;
 
-  // NEW meaning:
-  // true only when a jump was ATTEMPTED (grounded/grace) but was immediately blocked by ceiling.
-  // (game.ts plays the "error" sfx when this is true)
   let jumpFailedThisFrame = false;
 
   const dbg: {
@@ -146,17 +146,41 @@ export async function createGooseEntity(opts?: {
     dbg.jumpFail = !!jumpFailedThisFrame;
   };
 
+  // snapBody but NEVER allowed to push us into a solid tile.
+  function safeSnapBody(solid: SolidTileQuery, world: WorldInfo) {
+    const ox = body.x;
+    const oy = body.y;
+
+    snapBody(body);
+
+    if (aabbHitsTiles(body, solid, world)) {
+      body.x = ox;
+      body.y = oy;
+      return false;
+    }
+    return true;
+  }
+
+  function postPhysicsCleanup(dt: number, solid: SolidTileQuery, world: WorldInfo, preY: number) {
+    // critical: safe snap prevents “falling into a wall” slowdown/stick
+    safeSnapBody(solid, world);
+
+    handleCornerCatchUnstick(dt, body, physState, solid, world, unstick, preY);
+
+    // true emergency only (should now be extremely rare)
+    if (unstuckTileAabb(body, physState, solid, world)) {
+      if (DEBUG) log("UNSTUCK_EMERGENCY");
+    }
+  }
+
   function update(dt: number, keys: Keys, solid: SolidTileQuery, world: WorldInfo) {
     const k = controllable ? keys : (NO_KEYS as Keys);
 
-    // reset per-frame flag
     jumpFailedThisFrame = false;
 
-    // --- ground grace (coyote) evaluated BEFORE consuming buffered jump
     groundGrace = physState.grounded ? GROUND_GRACE_T : Math.max(0, groundGrace - dt);
     const canJumpNow = physState.grounded || groundGrace > 0;
 
-    // jump buffer (press)
     const jp = k.up || k.a;
     if (jp && !jumpLatch) (jumpBuf = JUMP_BUF_T), (jumpLatch = true);
     if (!jp) jumpLatch = false;
@@ -165,49 +189,39 @@ export async function createGooseEntity(opts?: {
 
     const ax = (k.left ? -1 : 0) + (k.right ? 1 : 0);
 
-    // accel / decel
-    if (ax) {
-      body.vx = clamp(body.vx + ax * RUN_ACCEL * dt, -RUN_MAX, RUN_MAX);
-    } else {
+    if (ax) body.vx = clamp(body.vx + ax * RUN_ACCEL * dt, -RUN_MAX, RUN_MAX);
+    else {
       const s = Math.sign(body.vx);
       body.vx = Math.max(0, Math.abs(body.vx) - RUN_DECEL * dt) * s;
     }
 
     let attemptedJump = false;
 
-    // consume buffered jump ONLY if grounded/grace
     if (jumpBuf > 0 && canJumpNow) {
       attemptedJump = true;
       jumpBuf = 0;
-      groundGrace = 0; // spend grace immediately so you can't "chain" via buffer timing
+      groundGrace = 0;
       body.vy = -JUMP_V;
       log("JUMP_ATTEMPT");
     }
 
-    // physics then snap + (rare) corner-unstick
     const preY = body.y;
     stepTileAabbPhysics(body, physState, dt, solid, world, physTune);
-    snapBody(body);
-    handleCornerCatchUnstick(dt, body, physState, solid, world, unstick, preY);
+    postPhysicsCleanup(dt, solid, world, preY);
 
-    // If we tried to jump, but we immediately bonked the ceiling and basically didn't move up,
-    // treat it as a blocked jump (play "error" from game.ts). This will NOT trigger for
-    // midair jump spam / double-jump prevention.
     if (attemptedJump && physState.hitCeil && body.y >= preY - CEIL_BLOCK_EPS) {
       jumpFailedThisFrame = true;
       if (DEBUG) log("JUMP_BLOCKED_CEIL");
     }
 
-    // refresh grace if we landed this frame (do NOT decay twice)
     if (physState.grounded) groundGrace = GROUND_GRACE_T;
     const onGround = physState.grounded || groundGrace > 0;
 
     const sideHit = !!(physState.hitLeft || physState.hitRight);
     const moving = Math.abs(body.vx) > MOVE_EPS;
 
-    if (!onGround) {
-      setState("airFlap");
-    } else if (!ax || sideHit || !moving) {
+    if (!onGround) setState("airFlap");
+    else if (!ax || sideHit || !moving) {
       setState("groundIdle");
       if (sideHit) body.vx = 0;
     } else {
@@ -215,9 +229,7 @@ export async function createGooseEntity(opts?: {
       if (isPushingWall(body, dir, solid, world)) {
         body.vx = 0;
         setState("groundIdle");
-      } else {
-        setState("groundWalk");
-      }
+      } else setState("groundWalk");
     }
 
     face.tick(dt, body.vx, ax as -1 | 0 | 1);
@@ -233,16 +245,12 @@ export async function createGooseEntity(opts?: {
     solid: SolidTileQuery,
     world: WorldInfo
   ) {
-    // puppets never drive error sfx; only controllable player does
     jumpFailedThisFrame = false;
 
-    // grace (coyote) for puppet
     groundGrace = physState.grounded ? GROUND_GRACE_T : Math.max(0, groundGrace - dt);
     const canJumpNow = physState.grounded || groundGrace > 0;
 
     const dir: -1 | 0 | 1 = masterDx < 0 ? -1 : masterDx > 0 ? 1 : 0;
-
-    if (dir !== 0 && DEBUG) log("PUPPET_INPUT", `masterDx: ${masterDx} | dir: ${dir}`);
 
     const pushingWall = dir !== 0 && isPushingWall(body, dir as -1 | 1, solid, world);
     const target = dir === 0 ? 0 : RUN_MAX * BABY_SPEED_MULT;
@@ -253,7 +261,6 @@ export async function createGooseEntity(opts?: {
 
     body.vx = dir * puppetSpeed;
 
-    // --- no midair repeat: require grounded/grace + edge latch
     if (masterJump && !puppetJumpLatch && canJumpNow) {
       groundGrace = 0;
       body.vy = Math.min(body.vy, -JUMP_V);
@@ -262,19 +269,9 @@ export async function createGooseEntity(opts?: {
     if (!masterJump) puppetJumpLatch = false;
 
     const preY = body.y;
-    const preX = body.x;
 
     stepTileAabbPhysics(body, physState, dt, solid, world, physTune);
-    snapBody(body);
-    handleCornerCatchUnstick(dt, body, physState, solid, world, unstick, preY);
-
-    if (dir !== 0 && DEBUG)
-      log(
-        "PHYS_RESULT",
-        `vx: ${body.vx.toFixed(2)} | moved: ${(body.x - preX).toFixed(2)} | hitL: ${physState.hitLeft} | hitR: ${
-          physState.hitRight
-        }`
-      );
+    postPhysicsCleanup(dt, solid, world, preY);
 
     if (physState.grounded) groundGrace = GROUND_GRACE_T;
     const onGround = physState.grounded || groundGrace > 0;
@@ -309,9 +306,8 @@ export async function createGooseEntity(opts?: {
     const dx = (body.x - cam.x) | 0;
     const dy = (body.y - cam.y) | 0;
 
-    if (face.get() === 1) {
-      ctx.drawImage(img, dx, dy);
-    } else {
+    if (face.get() === 1) ctx.drawImage(img, dx, dy);
+    else {
       ctx.save();
       ctx.translate(dx + body.w, dy);
       ctx.scale(-1, 1);
@@ -359,7 +355,6 @@ export async function createGooseEntity(opts?: {
       physState.grounded = v;
     },
 
-    // Read-only flag: jump was attempted but immediately blocked by ceiling.
     get _jumpFailed() {
       return !!jumpFailedThisFrame;
     },

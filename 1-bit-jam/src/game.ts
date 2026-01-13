@@ -134,7 +134,7 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
   let t = 0;
   let collisionSfxCooldown = 0;
 
-  // NEW: restart latch (prevents restarting every frame while held)
+  // restart latch (prevents restarting every frame while held)
   let restartLatch = false;
 
   // camera focus controller (X / keys.b)
@@ -330,7 +330,7 @@ export async function createGame(vw: number, vh: number, opts?: CreateGameOpts):
       sfx.userGesture();
     }
 
-    // NEW: press R to restart current level (edge-triggered)
+    // press R to restart current level (edge-triggered)
     if (keys.r && !restartLatch) {
   restartLatch = true;
   runtime.restartLevel();
@@ -386,7 +386,7 @@ if (!keys.r) restartLatch = false;
     const pvy0 = player.vy;
     player.update(dt, keys, runtime.isSolidTile, worldInfo);
 
-    // NEW: if the player's buffered jump expired without becoming valid, play error
+    // if the player's buffered jump expired without becoming valid, play error
     if ((player as any)._jumpFailed) {
       play("error", { volume: 0.5, detune: -120, minGapMs: 90 });
     }
