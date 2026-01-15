@@ -480,26 +480,45 @@ declare global {
     (impl ?? blit1bit)();
   };
 
-  // --- Framerate Gating Logic ---
+  // ----------------------------------------------------------------------------
+  // Fixed-timestep simulation (60Hz) — deterministic across ALL display Hz
+  // ----------------------------------------------------------------------------
+  const FIXED_FPS = 60;
+  const FIXED_DT = 1 / FIXED_FPS;
+
+  // Prevent spiral-of-death if tab stalls:
+  const MAX_FRAME_DT = 0.1; // clamp per rAF delta
+  const MAX_ACCUM = 0.25; // cap backlog
+  const MAX_STEPS_PER_FRAME = 8; // safety cap
+
   let last = performance.now();
-  const FPS = 60;
-  const FRAME_MIN_TIME = 1000 / FPS;
+  let acc = 0;
 
   function frame(now: number) {
-    const elapsed = now - last;
+    // real time delta (seconds), clamped
+    let dt = (now - last) / 1000;
+    last = now;
 
-    if (elapsed >= FRAME_MIN_TIME) {
-      const dt = Math.min(0.1, elapsed / 1000);
-      last = now - (elapsed % FRAME_MIN_TIME);
+    if (dt > MAX_FRAME_DT) dt = MAX_FRAME_DT;
+    if (dt < 0) dt = 0;
 
-      mgr.update(dt);
+    acc = Math.min(MAX_ACCUM, acc + dt);
 
-      // Reset one-frame input state
+    // Run the sim at a constant 60Hz, regardless of monitor refresh.
+    let steps = 0;
+    while (acc >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
+      mgr.update(FIXED_DT);
+
+      // one-frame input pulse: consumed by the sim step, not by render rate
       tapPressed = false;
 
-      mgr.draw(offCtx, VIRTUAL_W, VIRTUAL_H);
-      blit();
+      acc -= FIXED_DT;
+      steps++;
     }
+
+    // Render once per rAF (can be 60/120/144/240Hz etc.)
+    mgr.draw(offCtx, VIRTUAL_W, VIRTUAL_H);
+    blit();
 
     requestAnimationFrame(frame);
   }
